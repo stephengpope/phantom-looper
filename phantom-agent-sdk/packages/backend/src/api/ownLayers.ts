@@ -1,7 +1,7 @@
 // A user's settings and secrets are always relative to their own
 // organization and themself: they read that chain, and may name only their
 // own organization and user (a project they name is loaded as them, so the
-// policies decide it). The server key names any. Which layer a write lands
+// policies decide it). The service role names any. Which layer a write lands
 // on is still the deepest named; one naming none is the global layer, which
 // the policies refuse a user.
 import type { Caller } from '../identity/Identity.js';

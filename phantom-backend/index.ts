@@ -45,13 +45,13 @@ async function main() {
     // Crons: the SDK schedules and runs them, each as its owner; a prompt
     // cron runs the coding agent, as a cli window would.
     crons: { agent: CodingAgent },
-    // The bot's command menu — the global default, and the operator's chat's
+    // The bot's command menu — the global default, and the service role's chat's
     // for its mode (each chat's own is set when its mode changes; the bot
     // exists before the SDK registers the webhook, which onStart's reconcile
     // is what asks for).
     telegramCommandMenu: async () => {
-      const operator = await backend.telegramBot.authorizedUser();
-      return { global: menuFor('assistant'), ...(operator ? { forChat: menuFor((await telegram.state.read(operator)).mode) } : {}) };
+      const own = await backend.telegramBot.authorizedUser();
+      return { global: menuFor('assistant'), ...(own ? { forChat: menuFor((await telegram.state.read(own)).mode) } : {}) };
     },
 
     // The backend's git, with this app's parts: the conflict fixer is the
@@ -155,7 +155,7 @@ async function main() {
   // message, the title, the digest): the git sync's identity, so a conflict
   // turn re-takes the sync's own hold.
   let client: BackendClient | undefined;
-  const gitClient = () => (client ??= new BackendClient({ url: backend.loopback.url, credential: { phantomAdminKey: backend.env.apiKey }, clientId: GIT_CLIENT_ID, label: 'git sync' }));
+  const gitClient = () => (client ??= new BackendClient({ url: backend.loopback.url, credential: { serviceRoleKey: backend.env.serviceRoleKey }, clientId: GIT_CLIENT_ID, label: 'git sync' }));
   const oneShotDeps = () => ({ agentConfig: backend.agentConfig, client: gitClient() });
 
   const shutdown = async () => { await backend.stop(); process.exit(0); };

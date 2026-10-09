@@ -13,7 +13,7 @@
 // The machine-local settings live in ~/.phantom-cli/settings.json; everything
 // else is on the server, edited in-app with /settings. Env vars
 // still override the file, and reach ONLY the local keys (PHANTOM_BACKEND_URL,
-// PHANTOM_BACKEND_KEY, PHANTOM_CLI_AUTO_UPDATE) — the settings screen shows
+// PHANTOM_BACKEND_KEY or SERVICE_ROLE_KEY, PHANTOM_CLI_AUTO_UPDATE) — the settings screen shows
 // which source each value came from.
 import { openSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -55,10 +55,10 @@ const firstArg = process.argv[2];
 /** The paired server as update.ts sees it — null when nothing is paired. */
 function pairedServer(): ServerLink | null {
   const local = localValues();
-  if (!local.server_key || !local.server_url) return null;
+  if (!local.service_role_key || !local.server_url) return null;
   const url = String(local.server_url);
   const certificateAuthority = savedCaFor(url);
-  const key = String(local.server_key);
+  const key = String(local.service_role_key);
   return { url, call: apiFor(url, key, certificateAuthority), stream: streamFor(url, key, certificateAuthority) };
 }
 

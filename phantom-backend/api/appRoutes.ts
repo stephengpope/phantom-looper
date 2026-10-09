@@ -1,7 +1,7 @@
 // This app's own routes, registered through the backend's route door
 // (config.routes) under /app and the SDK's envelope: the system routes —
 // this app's upgrade, logs, status, restart and token report. The SDK puts
-// no key check on /app; this app admits the server key alone — a signed-in
+// no key check on /app; this app admits the service role alone — a signed-in
 // user gets the SDK's one refusal, access denied.
 import type { FastifyInstance } from 'fastify';
 import type { PhantomBackend, Deployment } from '@phantom-agent-sdk/backend';
@@ -19,7 +19,7 @@ export const appRoutes = (api: unknown, backend: PhantomBackend, extras: AppExtr
   const app = api as FastifyInstance;
   app.addHook('onRequest', async (request, reply) => {
     const caller = await backend.identity.require(request);
-    if (caller.type !== 'phantom_admin') return reply.code(403).send({ ok: false, error: { code: 'access_denied', message: 'access denied', retryable: false } });
+    if (caller.type !== 'service_role') return reply.code(403).send({ ok: false, error: { code: 'access_denied', message: 'access denied', retryable: false } });
   });
   systemRoutes(app, backend, extras);
 };

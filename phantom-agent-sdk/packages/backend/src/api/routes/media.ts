@@ -1,5 +1,5 @@
 // Media — tracked files on S3-compatible storage (media/Media.ts). The
-// phantom admin's routes, like every /api route; user space builds its own
+// service role's routes, like every /api route; user space builds its own
 // users' routes under /app on backend.media with its own rules.
 //
 //   GET    /media                    ?organization=&project=&user=&limit=  → ready files
@@ -20,7 +20,7 @@ import type { PhantomBackend } from '../../PhantomBackend.js';
 const TAG = { tags: ['media'] };
 const idParam = { type: 'object', required: ['id'], properties: { id: { type: 'string' } } };
 const ownerProps = {
-  organization: { type: 'string', description: 'The owning organization\'s id; absent = the phantom admin\'s.' },
+  organization: { type: 'string', description: 'The owning organization\'s id; absent = the service role\'s.' },
   project: { type: 'string', description: 'The project the file belongs to, if any.' },
   user: { type: 'string', description: 'The user the file belongs to or was uploaded by, if any.' },
 };
@@ -114,7 +114,7 @@ export function mediaRoutes(app: FastifyInstance, backend: PhantomBackend) {
     try { await backend.media.delete(req.params.id); return ok({}); } catch (error) { return refuse(reply, error); }
   });
 
-  app.post<{ Body: { origins: string[]; organization?: string } }>('/media/setup', { config: { operator: true }, schema: { ...TAG, summary: 'Allow browser uploads',
+  app.post<{ Body: { origins: string[]; organization?: string } }>('/media/setup', { config: { serviceRole: true }, schema: { ...TAG, summary: 'Allow browser uploads',
     description: 'Sets up the storage bucket so web apps on the given origins can upload to it and read from it directly.',
     body: { type: 'object', required: ['origins'], additionalProperties: false, properties: {
       origins: { type: 'array', minItems: 1, items: { type: 'string', pattern: '^https?://' } }, organization: ownerProps.organization } } } },

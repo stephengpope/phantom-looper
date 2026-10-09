@@ -99,7 +99,7 @@ function savePairing(paired: Paired, configPath?: string): void {
     writeFileSync(path, paired.ca, { mode: 0o600 });
     chmodSync(path, 0o600);
   }
-  const bad = setLocal('server_url', paired.url, configPath) ?? setLocal('server_key', paired.key, configPath);
+  const bad = setLocal('server_url', paired.url, configPath) ?? setLocal('service_role_key', paired.key, configPath);
   if (bad) throw new Error(bad);
 }
 

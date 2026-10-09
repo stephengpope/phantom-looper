@@ -8,7 +8,7 @@
 // hangs off onMessageReceived / onReactionReceived / onButtonTapped.
 //
 // One bot per server, any number of linked chats (telegram/chats.ts): the
-// operator's own (`telegram_authorized_user`, the cli's), and each user's —
+// service role's own (`telegram_authorized_user`, the cli's), and each user's —
 // their private chat, or a group for one project — linked by a one-time
 // code (/start <code>). A chat speaks for its user, and only the Telegram
 // account that linked it may speak in it. The webhook URL is never a
@@ -24,10 +24,10 @@ import { Approvals, type Ask } from './TelegramApprovals.js';
 import type { TelegramBotState } from './botState.js';
 import type { TelegramSentMessages } from './sentMessages.js';
 import type { TelegramHandledUpdates } from './handledUpdates.js';
-import { operatorLink, type ChatLink, type TelegramChats } from './chats.js';
+import { serviceRoleLink, type ChatLink, type TelegramChats } from './chats.js';
 import type { Sessions } from '../storage/Sessions.js';
 import type { Projects } from '../storage/Projects.js';
-import { OPERATOR_ORGANIZATION } from '../lib/scopes.js';
+import { SERVICE_ROLE_ORGANIZATION } from '../lib/scopes.js';
 import type { Settings } from '../storage/Settings.js';
 import type { SettingsEvents } from '../agents/SettingsEvents.js';
 import { timingSafeEqualStr } from '../lib/crypto.js';
@@ -81,7 +81,7 @@ export interface TelegramBotDeps {
   /** https://BACKEND_ADDRESS — the only source of the webhook URL. */
   publicAddress?: string;
   /** The command menu to register with Telegram (the app's commands): the
-   *  global default, and the operator's chat's for its current mode. */
+   *  global default, and the service role's chat's for its current mode. */
   commandMenu?: () => Promise<{ global: TelegramCommand[]; forChat?: TelegramCommand[] }>;
 }
 export interface TelegramCommand { command: string; description: string }
@@ -132,26 +132,26 @@ export class TelegramBot {
     return (await this.deps.settings.credential('telegram_bot_token')) ?? '';
   }
 
-  /** Who a chat speaks for: the operator's (the setting), a user's linked
+  /** Who a chat speaks for: the service role's (the setting), a user's linked
    *  chat, or null — not linked, so the bot does not answer it. */
   async linkFor(chatId: number): Promise<ChatLink | null> {
-    const operator = await this.authorizedUser();
-    if (operator !== null && chatId === operator) return operatorLink(operator);
+    const own = await this.authorizedUser();
+    if (own !== null && chatId === own) return serviceRoleLink(own);
     return this.deps.chats.byChat(chatId);
   }
 
-  /** The chat a session's messages go to: the operator's for the operator's
+  /** The chat a session's messages go to: the service role's for its own
    *  own work; otherwise the owner's chat for the session's project, else
    *  the owner's private chat. Null: nowhere linked. */
   async chatForSession(sessionId: string): Promise<number | null> {
     const session = await this.deps.sessions.get(sessionId);
     const project = session ? await this.deps.projects.get(session.projectId) : undefined;
     if (!session || !project) return null;
-    if (project.organizationId === OPERATOR_ORGANIZATION) return this.authorizedUser();
+    if (project.organizationId === SERVICE_ROLE_ORGANIZATION) return this.authorizedUser();
     return (await this.deps.chats.forOwner(project.organizationId, session.userId, project.id))?.chatId ?? null;
   }
 
-  /** The operator's own chat (the setting), or null when none is set. */
+  /** The service role's own chat (the setting), or null when none is set. */
   async authorizedUser(): Promise<number | null> {
     const chatId = Number(await this.deps.settings.resolve('telegram_authorized_user') ?? '');
     return Number.isFinite(chatId) && chatId ? chatId : null;

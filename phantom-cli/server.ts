@@ -13,7 +13,7 @@
 // The server is always https behind Caddy — dev included — so this is the one
 // transport; any other URL is a setup error, said in the error.
 import { rootCertificates } from 'node:tls';
-import { BackendClient, BackendConnection, isPhantomError } from '@phantom-agent-sdk/client';
+import { BackendClient, BackendConnection, credentialOf, isPhantomError } from '@phantom-agent-sdk/client';
 import { localValues } from './local.js';
 import { savedCaFor } from './provision.js';
 import { requestError, type Api } from './request.js';
@@ -28,7 +28,7 @@ export class Server {
   /** The address and key as the file has them now. */
   static connection(): { base: string; key: string } {
     const local = localValues();
-    return { base: String(local.server_url ?? ''), key: String(local.server_key ?? '') };
+    return { base: String(local.server_url ?? ''), key: String(local.service_role_key ?? '') };
   }
 
   /** The backend for the address in the file right now — rebuilt when the
@@ -42,7 +42,7 @@ export class Server {
     this.#connection?.close();
     const savedCa = savedCaFor(base);
     this.#connection = new BackendConnection({ origin, ...(savedCa ? { certificateAuthority: [...rootCertificates, savedCa] } : {}) });
-    this.#backend = new BackendClient({ url: `${base}/api`, credential: { phantomAdminKey: key }, clientId: this.clientId, label: this.label, fetch: this.#connection.fetch });
+    this.#backend = new BackendClient({ url: `${base}/api`, credential: credentialOf(key) ?? { serviceRoleKey: key }, clientId: this.clientId, label: this.label, fetch: this.#connection.fetch });
     this.#base = base;
     return this.#backend;
   }

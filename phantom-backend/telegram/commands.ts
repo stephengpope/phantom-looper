@@ -83,7 +83,7 @@ const presetList = new Map<number, string[]>();
 
 /** Handle a slash command. `text` starts with '/'. */
 /** Commands that act on the whole server, not one user's work. */
-const OPERATOR_ONLY = new Set(['status', 'providers', 'models', 'presets', 'update', 'cpu', 'tokens', 'restart']);
+const SERVICE_ROLE_ONLY = new Set(['status', 'providers', 'models', 'presets', 'update', 'cpu', 'tokens', 'restart']);
 
 export async function handleCommand(
   telegram: TelegramAssistantBot, client: TelegramApi, chatId: number, text: string,
@@ -95,8 +95,8 @@ export async function handleCommand(
   const bot = await telegram.state.read(chatId);
   const link = await telegram.backend.telegramBot.linkFor(chatId);
   // The server's own commands — its model, presets, upgrade, restart, status
-  // and spend — are the operator's chat's alone.
-  if (OPERATOR_ONLY.has(cmd) && !link?.operator) { await reply('⛔ access denied'); return; }
+  // and spend — are the service role's chat's alone.
+  if (SERVICE_ROLE_ONLY.has(cmd) && !link?.serviceRole) { await reply('⛔ access denied'); return; }
 
   switch (cmd) {
     case 'start':

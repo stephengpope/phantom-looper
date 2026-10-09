@@ -2072,7 +2072,7 @@ export class WindowStore {
       // refused the key, or nothing answered at that address at all.
       this.note((entry as Error).message);
       if ((entry as { code?: string }).code === 'unauthorized') {
-        this.note('fix the key under /server — a server box prints its key with `phantom-backend key`; a dev checkout gets it from ./scripts/setup.sh');
+        this.note('fix the key under /server — a server box prints its service role key with `phantom-backend key`; a dev checkout gets it from ./scripts/setup.sh');
       } else {
         this.note('have a server? its address and key go under /server, then /project starts a session');
         this.note('need one? quit and run `phantom-cli setup-backend`');

@@ -71,7 +71,11 @@ export const SDK_MIGRATIONS: MigrationSet = {
 
 export const MIGRATOR_ROLE = 'migrator';
 export const APP_MIGRATOR_ROLE = 'app_migrator';
-export const BACKEND_ROLE = 'backend';
+/** The backend's own role: no policy fences it (bypassrls). The same name
+ *  as the key that is the backend's own credential — one principal, one word.
+ *  An install from before named it `backend`; boot renames it (ensureRoles). */
+export const SERVICE_ROLE = 'service_role';
+const SERVICE_ROLE_FORMERLY = 'backend';
 export const AUTHENTICATED_ROLE = 'authenticated';
 
 /** The SDK's schemas — the migrator's. Every other schema of ours is user
@@ -93,28 +97,28 @@ export class Database {
     readonly pool: pg.Pool,
     /** THE handle every table owner reads and writes through. Inside
      *  `actAs` (lib/acting.ts) each statement runs as `authenticated` for
-     *  that organization and user; outside it, as `backend`. */
+     *  that organization and user; outside it, as `service_role`. */
     readonly drizzle: Drizzle,
-    /** Always `backend`, whoever the work is for: Better Auth (it manages
+    /** Always `service_role`, whoever the work is for: Better Auth (it manages
      *  identity itself and enforces its own rules) and the settings
      *  cascade's reads (the global layer is no organization's row). */
     readonly system: Drizzle,
-    /** The `backend` role's connection string — what the pool is on. */
+    /** The `service_role` role's connection string — what the pool is on. */
     readonly url: string,
     private readonly migratorUrl: string,
     private readonly appMigratorUrl: string,
     private readonly authenticatedUrl: string,
   ) {}
 
-  /** Boot. As the bootstrap superuser: the `migrator` and `backend` roles
-   *  exist with this key's passwords and their grants (idempotent, heals
-   *  a rotated key and an install from before the split). Then the
-   *  superuser connection closes and the pool opens as `backend`. Nothing
+  /** Boot. As the bootstrap superuser: the `migrator` and `service_role`
+   *  roles exist with this key's passwords and their grants (idempotent,
+   *  heals a rotated key and an install from before the split). Then the
+   *  superuser connection closes and the pool opens as `service_role`. Nothing
    *  is migrated yet. */
   static async open(superuserUrl: string, encryptionKey: Buffer): Promise<Database> {
     const migratorUrl = withRole(superuserUrl, MIGRATOR_ROLE, derivedPassword(encryptionKey, `role:${MIGRATOR_ROLE}`));
     const appMigratorUrl = withRole(superuserUrl, APP_MIGRATOR_ROLE, derivedPassword(encryptionKey, `role:${APP_MIGRATOR_ROLE}`));
-    const backendUrl = withRole(superuserUrl, BACKEND_ROLE, derivedPassword(encryptionKey, `role:${BACKEND_ROLE}`));
+    const backendUrl = withRole(superuserUrl, SERVICE_ROLE, derivedPassword(encryptionKey, `role:${SERVICE_ROLE}`));
     const authenticatedUrl = withRole(superuserUrl, AUTHENTICATED_ROLE, derivedPassword(encryptionKey, `role:${AUTHENTICATED_ROLE}`));
     const superuser = new pg.Client({ connectionString: superuserUrl });
     await superuser.connect();
@@ -147,11 +151,11 @@ export class Database {
   /** A caller's own SQL on this database, fenced by Postgres: one
    *  connection as `authenticated`, one transaction that names the
    *  caller's organization and user for the row-level policies (057), the
-   *  statements, commit — an error undoes the whole call. The phantom admin
-   *  runs as `backend` (no policies, as every SDK read). Only a user has
+   *  statements, commit — an error undoes the whole call. The service role
+   *  runs as itself (no policies, as every SDK read). Only a user has
    *  rows to see; a user with no organization sees none. */
   async queryAs(caller: Caller, sql: string, options: QueryOptions): Promise<StatementResult[]> {
-    const client = new pg.Client({ connectionString: caller.type === 'phantom_admin' ? this.url : this.authenticatedUrl,
+    const client = new pg.Client({ connectionString: caller.type === 'service_role' ? this.url : this.authenticatedUrl,
       connectionTimeoutMillis: 5000, types: AGENT_TYPES });
     await client.connect();
     try {
@@ -262,21 +266,30 @@ async function ensureRoles(superuser: pg.Client, passwords: { migrator: string; 
   const database = quoteIdent(datname);
   const migrator = quoteIdent(MIGRATOR_ROLE);
   const appMigrator = quoteIdent(APP_MIGRATOR_ROLE);
-  const backend = quoteIdent(BACKEND_ROLE);
+  const backend = quoteIdent(SERVICE_ROLE);
   const authenticated = quoteIdent(AUTHENTICATED_ROLE);
 
-  const existing = new Set((await superuser.query<{ rolname: string }>(
-    'select rolname from pg_roles where rolname = any($1)', [[MIGRATOR_ROLE, APP_MIGRATOR_ROLE, BACKEND_ROLE, AUTHENTICATED_ROLE]])).rows.map((row) => row.rolname));
+  // The backend's role was `backend` before it took the key's name: the
+  // role is renamed, so everything it owns and may do comes along (a rename
+  // drops the password; it is set again right below, as every boot sets it).
+  const roles = async () => new Set((await superuser.query<{ rolname: string }>(
+    'select rolname from pg_roles where rolname = any($1)', [[MIGRATOR_ROLE, APP_MIGRATOR_ROLE, SERVICE_ROLE, SERVICE_ROLE_FORMERLY, AUTHENTICATED_ROLE]])).rows.map((row) => row.rolname));
+  let existing = await roles();
+  if (existing.has(SERVICE_ROLE_FORMERLY) && !existing.has(SERVICE_ROLE)) {
+    await superuser.query(`alter role ${quoteIdent(SERVICE_ROLE_FORMERLY)} rename to ${backend}`);
+    log.info({ from: SERVICE_ROLE_FORMERLY, to: SERVICE_ROLE }, 'role renamed');
+    existing = await roles();
+  }
   const upsertRole = async (name: string, quoted: string, password: string, attributes: string) => {
     if (existing.has(name)) await superuser.query(`alter role ${quoted} with ${attributes} password ${quoteLiteral(password)}`);
     else { await superuser.query(`create role ${quoted} login ${attributes} password ${quoteLiteral(password)}`); log.info({ role: name }, 'role created'); }
   };
   await upsertRole(MIGRATOR_ROLE, migrator, passwords.migrator, 'nosuperuser nocreatedb nocreaterole noinherit');
-  // bypassrls: an app's migrations are the operator's own code, and a data
+  // bypassrls: an app's migrations are the server's own code, and a data
   // migration reads rows to move them — the policies fence users, not them.
   await upsertRole(APP_MIGRATOR_ROLE, appMigrator, passwords.appMigrator, 'nosuperuser nocreatedb nocreaterole noinherit bypassrls');
   // bypassrls: the row-level policies fence `authenticated`, never the backend's own reads and writes.
-  await upsertRole(BACKEND_ROLE, backend, passwords.backend, 'nosuperuser createdb createrole noinherit bypassrls');
+  await upsertRole(SERVICE_ROLE, backend, passwords.backend, 'nosuperuser createdb createrole noinherit bypassrls');
   await upsertRole(AUTHENTICATED_ROLE, authenticated, passwords.authenticated, 'nosuperuser nocreatedb nocreaterole noinherit nobypassrls');
   // Work done for a user switches the backend's connection to `authenticated`
   // for each statement (set_config('role', …, true)): the backend may become it.
@@ -306,7 +319,7 @@ async function ensureRoles(superuser: pg.Client, passwords: { migrator: string; 
         where n.nspname = $1 and p.proowner <> (select oid from pg_roles where rolname = $2)`,
       [nspname, ownerRole]);
     for (const { signature } of functions) await superuser.query(`alter function ${signature} owner to ${owner}`);
-    // backend: every row in every table that exists now. authenticated: the
+    // service_role: every row in every table that exists now. authenticated: the
     // schema only — a table is reachable by a user when a migration grants it.
     await superuser.query(`grant usage on schema ${schemaName} to ${backend}, ${authenticated}`);
     await superuser.query(`grant select, insert, update, delete on all tables in schema ${schemaName} to ${backend}`);
@@ -347,22 +360,22 @@ async function ensureRoles(superuser: pg.Client, passwords: { migrator: string; 
   await superuser.query(`alter default privileges for role ${migrator} grant usage on schemas to ${appMigrator}`);
   await superuser.query(`alter default privileges for role ${migrator} grant select, references on tables to ${appMigrator}`);
 
-  // backend drops a play-space database `with (force)`: ending its open
+  // service_role drops a play-space database `with (force)`: ending its open
   // connections takes pg_signal_backend. Play spaces made before the split
-  // are the superuser's: their databases become backend's (so it may drop
-  // them) and backend gets admin on their roles (so it may re-set a
-  // password and drop them). A role backend creates itself carries that
-  // admin already.
+  // are the superuser's: their databases become service_role's (so it may
+  // drop them) and service_role gets admin on their roles (so it may re-set
+  // a password and drop them). A role service_role creates itself carries
+  // that admin already.
   await superuser.query(`grant pg_signal_backend to ${backend}`);
   const { rows: playSpaces } = await superuser.query<{ datname: string }>(
-    `select datname from pg_database d where datname like 'project\\_%' and d.datdba <> (select oid from pg_roles where rolname = $1)`, [BACKEND_ROLE]);
+    `select datname from pg_database d where datname like 'project\\_%' and d.datdba <> (select oid from pg_roles where rolname = $1)`, [SERVICE_ROLE]);
   for (const { datname: name } of playSpaces) await superuser.query(`alter database ${quoteIdent(name)} owner to ${backend}`);
   const { rows: playRoles } = await superuser.query<{ rolname: string }>(
     `select r.rolname from pg_roles r where r.rolname like 'project\\_%'
        and not exists (select from pg_auth_members m where m.roleid = r.oid and m.member = (select oid from pg_roles where rolname = $1) and m.admin_option)`,
-    [BACKEND_ROLE]);
+    [SERVICE_ROLE]);
   for (const { rolname } of playRoles) await superuser.query(`grant ${quoteIdent(rolname)} to ${backend} with admin option, inherit false, set false`);
-  if (playSpaces.length || playRoles.length) log.info({ databases: playSpaces.length, roles: playRoles.length }, 'play spaces handed to the backend role');
+  if (playSpaces.length || playRoles.length) log.info({ databases: playSpaces.length, roles: playRoles.length }, 'play spaces handed to the service role');
 }
 
 async function runMigrations(client: pg.Client, set: MigrationSet, options: { upTo?: string }): Promise<string[]> {

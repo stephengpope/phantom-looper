@@ -24,7 +24,7 @@ export { CATALOG_PROVIDERS, hasCatalog, fromModelsDev, fetchCatalog, writeSnapsh
 // lib
 export { logger, errStr } from './lib/log.js';
 export { Clock, TIMEZONES } from './lib/clock.js';
-export { GLOBAL, LAYERS, OPERATOR_ORGANIZATION, projectScope, organizationScope, userScope, scopeOf, actingScope, scopeNames, layerOf, type Layer, type OverridableLayer } from './lib/scopes.js';
+export { GLOBAL, LAYERS, SERVICE_ROLE_ORGANIZATION, projectScope, organizationScope, userScope, scopeOf, actingScope, scopeNames, layerOf, type Layer, type OverridableLayer } from './lib/scopes.js';
 export { makePaths, sessionDir, repoDir, slotPrefix, slotUlid, type Paths } from './lib/paths.js';
 export { encrypt, decrypt, timingSafeEqualStr } from './lib/crypto.js';
 
@@ -89,7 +89,7 @@ export { connectFetch, isConnectFailure, CONNECT_RETRIES, CONNECT_TIMEOUT_MS, KE
 export { askText, answeredText, parseAnswer, type Ask, type ApprovalClient } from './telegram/TelegramApprovals.js';
 export { TelegramHandledUpdates } from './telegram/handledUpdates.js';
 export { TelegramSentMessages, type TelegramSentMessage } from './telegram/sentMessages.js';
-export { TelegramChats, operatorLink, type ChatLink } from './telegram/chats.js';
+export { TelegramChats, serviceRoleLink, type ChatLink } from './telegram/chats.js';
 export { TelegramBotState, type TelegramBotStateRow } from './telegram/botState.js';
 export { telegramChannel } from './telegram/telegramChannel.js';
 export { lastAssistantFromJsonl } from './telegram/transcriptHelper.js';

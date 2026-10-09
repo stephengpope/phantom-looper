@@ -10,15 +10,15 @@
 // events queue, and go when the link is back. Only a job (a kill, a cancel)
 // stops anything.
 //
-// Identity: the key says what the host is (the root API key: shared; a user's
-// key: theirs). The row's id is persisted beside the volume (host.json) so a
+// Identity: the key says what the host is (the service role key: shared; a
+// user role key: theirs) — by its prefix, before anything is sent. The row's id is persisted beside the volume (host.json) so a
 // reconnect — and a restart — is the same host, never a new one. `boot` is
 // fresh per process: the backend fails what a dead process was running.
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import type Docker from 'dockerode';
-import { BackendClient, BackendConnection, Link, newId, type Credential, type RetryPolicy } from '@phantom-agent-sdk/client';
+import { BackendClient, BackendConnection, Link, newId, credentialOf, SERVICE_ROLE_KEY_PREFIX, USER_ROLE_KEY_PREFIX, type Credential, type RetryPolicy } from '@phantom-agent-sdk/client';
 import { LocalHost, type LocalHostOptions } from '../runtime/LocalHost.js';
 import { Images } from '../runtime/Images.js';
 import { makeDocker } from '../runtime/Docker.js';
@@ -36,7 +36,7 @@ const HOST_RETRY: RetryPolicy = { waitsS: [1, 2, 4, 8], budgetMs: 15_000, retrya
 export interface SessionHostOptions {
   /** The backend's origin, e.g. https://phantom.example.com */
   origin: string;
-  /** The root API key (a shared host) or a user's API key (their host). */
+  /** The service role key (a shared host) or a user role key (their host). */
   key: string;
   name: string;
   paths: Paths;
@@ -66,9 +66,11 @@ export class SessionHost {
     const origin = new URL(opts.origin).origin;
     if (!origin.startsWith('https:')) throw new Error(`BACKEND_URL must be https:// — got ${origin}`);
     this.#connection = new BackendConnection({ origin, ...(opts.certificateAuthority ? { certificateAuthority: opts.certificateAuthority } : {}) });
-    // The key is the server's (a shared host) or a user's API key (theirs):
-    // tried as the first, and as the second when the backend says 401.
-    this.#backend = this.#client({ phantomAdminKey: opts.key });
+    // The key says which it is by its prefix; a key with neither is refused
+    // here, before it is sent anywhere.
+    const credential = credentialOf(opts.key);
+    if (!credential) throw new Error(`BACKEND_KEY must be the service role key (${SERVICE_ROLE_KEY_PREFIX}…, a shared host) or your user role key (${USER_ROLE_KEY_PREFIX}…, your host)`);
+    this.#backend = this.#client(credential);
     this.#local = new LocalHost(opts.docker, new Images(opts.docker), opts.paths, opts.local, { id: null, name: opts.name });
   }
 
@@ -80,13 +82,8 @@ export class SessionHost {
     });
   }
 
-  /** Which key this is — the root API key or a user's — proven against the backend. */
+  /** The key, proven against the backend. */
   async #resolveCredential(): Promise<void> {
-    try { await this.#backend.call('GET', '/identity/me'); return; }
-    catch (error) {
-      if ((error as { status?: number }).status !== 401) throw error;
-    }
-    this.#backend = this.#client({ apiKey: this.opts.key });
     await this.#backend.call('GET', '/identity/me');
   }
 
@@ -95,7 +92,7 @@ export class SessionHost {
     const origin = env.BACKEND_URL;
     const key = env.BACKEND_KEY;
     if (!origin) throw new Error('BACKEND_URL is not set — the backend this host connects to');
-    if (!key) throw new Error('BACKEND_KEY is not set — the root API key (a shared host) or your API key (your host)');
+    if (!key) throw new Error('BACKEND_KEY is not set — the service role key (a shared host) or your user role key (your host)');
     const root = env.WORKSPACE_ROOT_PATH || '/workspaces';
     return new SessionHost({
       origin, key,
@@ -129,7 +126,7 @@ export class SessionHost {
       try { await this.#resolveCredential(); break; }
       catch (error) {
         const status = (error as { status?: number }).status;
-        if (status === 401 || status === 403) throw new Error(`the backend refused the key (${status}) — BACKEND_KEY must be the root API key or a user's API key`);
+        if (status === 401 || status === 403) throw new Error(`the backend refused the key (${status}) — BACKEND_KEY must be the service role key or a user role key`);
         if (this.#stopped) return;
         log.warn({ err: errStr(error), retryInMs: wait }, 'backend unreachable — waiting');
         await new Promise((wake) => setTimeout(wake, wait));

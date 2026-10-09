@@ -63,7 +63,7 @@ export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     async (req, reply) => {
       const scopes = await scopesOf(req);
       if ('error' in scopes) return reply.code(404).send(err('not_found', scopes.error));
-      // Bare, the server key lists every layer on the server; a user, their own chain.
+      // Bare, the service role lists every layer on the server; a user, their own chain.
       const raw = scopes.label !== 'global' || req.caller?.type === 'user'
         ? await ctx.settings.listSecrets(scopes.chain)
         : await ctx.settings.listAllSecrets();

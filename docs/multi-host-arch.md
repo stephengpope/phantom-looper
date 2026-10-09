@@ -3,7 +3,7 @@
 A session host is a box with Docker and a workspace volume that connects OUT
 to the backend and runs workspaces for it. The backend keeps the database and
 makes every decision; a host keeps files and containers and does what it is
-told. Any number of hosts, anywhere: a server an operator runs, a developer's
+told. Any number of hosts, anywhere: a server someone runs, a developer's
 Mac, or none at all — the backend itself is a host too.
 
 ## The three pieces
@@ -33,7 +33,7 @@ its own — every job carries what it needs.
 
 ## What a host is
 
-The key makes it. The root API key registers a **shared** host: any workspace
+The key makes it. The service role key registers a **shared** host: any workspace
 may land there. A user's API key registers a **user** host: only that
 user's workspaces. The backend classifies the key as it does every request;
 nothing new to declare.
@@ -107,8 +107,9 @@ One word per thing, the same in code, routes, docs and what people read:
 |---|---|
 | session host | a box that runs workspaces for the backend; `session_hosts`, `SessionHosts`, `/api/session-hosts` |
 | user host | a session host registered with a user's API key; only their workspaces |
-| shared host | a session host registered with the root API key; anyone's workspaces |
-| root API key | `API_KEY` in `.env`; the backend's own credential |
+| shared host | a session host registered with the service role key; anyone's workspaces |
+| service role key | `SERVICE_ROLE_KEY` in `.env` (`ph_service_role_…`); the backend's own credential |
+| user role key | a user's own key (`ph_user_role_…`), made at `/api/auth/api-key`; a key's prefix says which it is |
 | workspace | a checkout and its container; `phantom-backend-session-<id>`, grouped as `phantom-backend-sessions` |
 | job | one instruction from the backend to a host, `{ id, type, ... }` |
 | feed | the long GET a host (or a cli) holds open; records come down it |

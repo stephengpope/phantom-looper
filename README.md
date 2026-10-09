@@ -149,7 +149,7 @@ Environment variables, if you need them:
 | Variable | Overrides |
 |---|---|
 | `PHANTOM_BACKEND_URL` | the server URL |
-| `PHANTOM_BACKEND_KEY` | the server API key |
+| `PHANTOM_BACKEND_KEY` | the key: the server's service role key, or your user role key |
 
 ---
 

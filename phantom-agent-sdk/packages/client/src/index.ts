@@ -10,7 +10,7 @@ export type { TokenTotals } from './transcript.js';
 
 // The connection — for an app's own kits and calls.
 export { BackendClient, PERSON, type BackendOptions, type CallOptions, type Envelope, type Credential } from './backend.js';
-export { Identity, IDENTITY_PATH, credentialHeaders, type Caller } from './identity.js';
+export { Identity, IDENTITY_PATH, credentialHeaders, credentialOf, SERVICE_ROLE_KEY_PREFIX, USER_ROLE_KEY_PREFIX, type Caller } from './identity.js';
 export { Media, type MediaFile, type MediaOwner, type MediaUploadPlan, type MediaLink } from './media.js';
 export { PhantomError, isPhantomError, SDK_ERROR_CODES, type ErrorCode, type SdkErrorCode } from './errors.js';
 export type { RetryPolicy } from './model/retry.js';

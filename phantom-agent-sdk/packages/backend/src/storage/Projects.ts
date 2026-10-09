@@ -34,7 +34,7 @@ export interface NewProject {
   id: string; owner: string; name: string;
   displayName: string | null; baseBranch: string; branchPrefix: string;
   /** The organization it belongs to; absent = the acting caller's, or the
-   *  operator's (the column's default, 059). */
+   *  service role's (the column's default, 059/063). */
   organizationId?: string;
 }
 
@@ -52,7 +52,7 @@ export class Projects {
     private readonly databases?: AgentDatabases,
   ) {}
 
-  /** THE ownership guard: the rows a caller may see. The phantom admin (and no
+  /** THE ownership guard: the rows a caller may see. The service role (and no
    *  caller — the SDK's own engines) sees every project; a user sees their
    *  organization's. Everything under a project — workspaces, sessions,
    *  cards, crons, secrets, the play-space database — is reached through

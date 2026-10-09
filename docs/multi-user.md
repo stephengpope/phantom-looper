@@ -16,8 +16,8 @@ The SDK is **auth as a service** (the Supabase shape): it ships the user
 and organization tables, the sign-in routes and `backend.identity.require`.
 Who may see which project, session or row is **user space's** rule, written
 in user space's routes against user space's tables — which join the SDK's
-tables in the same database. The SDK's own routes, the phantom admin's
-`API_KEY`, the looper, cron, Telegram and the cli do not change.
+tables in the same database. The SDK's own routes, the service role's
+`SERVICE_ROLE_KEY`, the looper, cron, Telegram and the cli do not change.
 
 ## Where things live
 
@@ -46,7 +46,7 @@ One role per job, least privilege; a name says the job, no brand in it
 |---|---|---|---|
 | `superuser` | everything | — | Docker's bootstrap (`POSTGRES_USER`; `phantom` on installs from before); boot, once; the database console |
 | `migrator` | create / alter / drop tables in every schema of ours (owns them) | — | boot: `Database.migrate`, both sets, each on its own short-lived connection |
-| `backend` | read / write rows in every schema of ours; create and drop play-space databases and roles | alter or drop a table | the running backend — SDK code and user space code, one process, one pool |
+| `service_role` | read / write rows in every schema of ours; create and drop play-space databases and roles | alter or drop a table | the running backend — SDK code and user space code, one process, one pool |
 | `project_<id>` | everything inside its own database, tables included | anything outside it | the agent's `database_query` (unchanged) |
 
 At runtime nothing — a bug, a bad query, a tool — can change a table. Only
@@ -57,32 +57,32 @@ derivedPassword`), the way every play-space role's already was: stored
 nowhere, re-set on every boot, never leaving the process. So there is no
 new environment variable: `DATABASE_URL` is the superuser's, boot uses it
 once (`Database.open`) to make sure the roles exist with current passwords
-and grants, then hangs up and opens the pool as `backend`. An install from
+and grants, then hangs up and opens the pool as `service_role`. An install from
 before the split: that same boot hands every schema, table and function
-to `migrator`, every `project_<id>` database to `backend` and gives
-`backend` admin on their roles.
+to `migrator`, every `project_<id>` database to `service_role` and gives
+`service_role` admin on their roles.
 
 The console (CloudBeaver at `/db`) connects as the superuser (`DB_UI_DSN`)
 and sees everything. Its own account — the browser prompt's name with the
-API key — is `console_admin` (was `phantom_admin`: the admin account of
+key — is `service_role` (was `console_admin`, before that `phantom_admin`: the admin account of
 the console, nothing else in the name).
 
 ## Who calls the HTTP API — the paths
 
 | Prefix | Owned by | Auth | Audience |
 |---|---|---|---|
-| `/api/*` | SDK | `API_KEY` (unchanged) | the phantom admin: cli, looper, cron, updater, scripts; user space's own code |
+| `/api/*` | SDK | `SERVICE_ROLE_KEY` | the service role: cli, looper, cron, updater, scripts; user space's own code |
 | `/api/auth/*` | SDK (Better Auth) | public / the user's own token | an app's end users: sign in, organizations, invitations, keys |
-| `/api/identity/*` | SDK | `me`: any caller · the rest: the key | who am I; the phantom admin's bootstrap |
+| `/api/identity/*` | SDK | `me`: any caller · the rest: the key | who am I; the service role's bootstrap |
 | `/app/*` | user space | the app's choice per route: `backend.identity.require` | the app's end users |
-| `/db` | SDK (console) | Basic: `console_admin` + the API key | the phantom admin, in a browser |
+| `/db` | SDK (console) | Basic: `service_role` + the service role key | the service role, in a browser |
 
 The SDK never serves under `/app`; user space never under `/api`. The
 prefix says who owns a route and who may call it. `config.routes` registers
 under `/app` with no key check — the app applies its own. A browser app on
 another origin (`identity.trustedOrigins`) gets CORS with credentials on
 `/api/auth` and `/app`. phantom-looper's routes (`/models`, `/update`,
-`/system/*`) moved to `/app` and admit the phantom admin alone, as before; the
+`/system/*`) moved to `/app` and admit the service role alone, as before; the
 client SDK sends a path under `/app/` to the origin, any other under
 `/api`.
 
@@ -90,7 +90,7 @@ client SDK sends a path under `/app/` to the origin, any other under
 
 | Caller | Sees |
 |---|---|
-| Phantom admin (`API_KEY`) | everything |
+| Service role (`SERVICE_ROLE_KEY`) | everything |
 | User space code (in-process) | every row; applies its own rules per end user |
 | End user (Better Auth token) | what the app's `/app` routes hand them |
 | Agent | its session's project; its own play-space database |
@@ -150,7 +150,7 @@ comma-separated); nothing in it uses it yet.
 
 `invitationUrl` was replaced by the invitation mail template (step 7).
 
-**Bootstrap:** the phantom admin makes the first user with
+**Bootstrap:** the service role makes the first user with
 `POST /api/identity/users {email, name}` and gets their link with
 `POST /api/identity/magic-link {email}` — handed back, not mailed, so
 SMTP is not needed for the first sign-in. From there users invite others
@@ -178,11 +178,11 @@ class Identity {
   createUser({ email, name? }): Promise<UserRow>               // bootstrap; 'email_taken' → 409
   magicLink(email): Promise<string>                            // bootstrap: the link, not mailed
 }
-type Caller = { type: 'phantom_admin' } | { type: 'user'; user: UserRow; organization: OrganizationRow; role: OrganizationRole }
+type Caller = { type: 'service_role' } | { type: 'user'; user: UserRow; organization: OrganizationRow; role: OrganizationRole }
 class IdentityError extends Error { code: 'disabled' | 'unauthorized' | 'email_taken' }
 
 // src/storage/Database.ts
-Database.open(superuserUrl, encryptionKey): Promise<Database>   // the roles, then the pool as backend
+Database.open(superuserUrl, encryptionKey): Promise<Database>   // the roles, then the pool as service_role
 database.url                                                     // the backend role's connection string
 database.migrate(set): Promise<string[]>                         // as migrator, own connection
 
@@ -199,10 +199,10 @@ Exported: `Mailer`, `MailerError`, `Identity`,
   by the new boot — every table to migrator, backend inserts a row,
   `alter table` / `drop table` refused ("must be owner"), play spaces
   created, queried, dropped; a fresh database the same. The console opens
-  as `console_admin` and connects.
+  as `service_role` and connects.
 - Mail: `mail_not_configured`; the six settings over the API; the test
   mail in the inbox.
-- Sign-in: the phantom admin creates Ann (409 the second time); her link
+- Sign-in: the service role creates Ann (409 the second time); her link
   handed back signs her in (bearer, `me` → her personal organization,
   owner); her link by mail does the same; a stranger's request gets 200
   and no mail; Ann makes Acme and invites Bob — the mail arrives, Bob's
@@ -211,7 +211,7 @@ Exported: `Mailer`, `MailerError`, `Identity`,
   on `/api/projects` is 401; sign-out ends her session. CORS: a trusted
   origin's preflight is allowed with credentials, an unknown origin's is
   not. Off (`AUTH_SECRET` empty): `/api/auth` is a bare 401, `me` still
-  answers the phantom admin, the bootstrap route answers `disabled`, `/app`
+  answers the service role, the bootstrap route answers `disabled`, `/app`
   answers the key.
 
 ## Part 2 — built 2026-10-05
@@ -243,7 +243,7 @@ it: `scopeOf(project)` — one helper beside `SettingScope` — gives
 `{ projectId, organizationId }` from the row's new column (step 4 adds
 it; this step adds the column first, with no owner yet). `userId` is
 never the SDK's to fill: the looper, cron, Telegram and the `/api` routes
-run as the phantom admin; user space passes `{ userId }` in its own calls.
+run as the service role; user space passes `{ userId }` in its own calls.
 
 **Changes.**
 
@@ -255,7 +255,7 @@ run as the phantom admin; user space passes `{ userId }` in its own calls.
   replaces `projectOverridable` (37 declarations: the SDK's, the app's,
   every agent type's ten; `projectOnly` stays). The rule applied to the
   SDK's own: whatever a project may override, an organization and a user
-  may too — a bigger project; phantom admin-only settings (console, telegram,
+  may too — a bigger project; service-role-only settings (console, telegram,
   smtp, limits, upgrade) stay global.
 - `Settings.writeAtScope(layer, scopeName, patch)`: `layer` is the chain's
   word; `not_overridable` says which layer refused. The provider-first
@@ -282,13 +282,13 @@ the cli's settings screen is unchanged; deleting O deletes its rows.
 *Built:* the column and constraint came with 056 in step 3;
 `Projects.list(caller?)` / `get(id, caller?)` and `NewProject.organizationId`.
 
-**What.** `projects.organization_id` (nullable → the phantom admin's, which is
+**What.** `projects.organization_id` (nullable → the service role's, which is
 every project today; FK to `identity.organization`, `on delete restrict`).
 `unique nulls not distinct (organization_id, owner, name)` replaces
 `unique (owner, name)`: two organizations may register one repo.
 
 *Fixed in the proof:* the FK was `on delete set null` — a deleted
-organization's projects became the phantom admin's. Where the phantom admin
+organization's projects became the service role's. Where the service role
 (or another deleted organization) already had that repo, the unique refused
 it and the delete was a 500: the organization could never go. Now an
 organization that owns projects is not deleted — Identity's
@@ -301,16 +301,16 @@ duplicate cron or preset name) was a 500 — it reads the cause now.
 
 **Trace.** User space's `/app` route: `caller = identity.require(req,
 { users: true })` → `projects.list(caller)` / `projects.get(id, caller)`
-→ `visibleTo(caller)`: the phantom admin matches every row; a user matches
+→ `visibleTo(caller)`: the service role matches every row; a user matches
 `organization_id = caller.organization.id`. Everything under a project —
 workspaces, sessions, cards, crons, the play-space database, secrets,
 project settings — is reached through a `ProjectRow` (Cards, Crons,
 Sessions.create, the tools' `ToolCtx.project`) or a `projectId` taken
 from one, so a project the guard refused takes all of it with it: one
 check, inherited. `projects.create({ …, organizationId })` from user
-space; the SDK's `POST /api/projects` (phantom admin) writes null.
+space; the SDK's `POST /api/projects` (service role) writes null.
 `Sessions.list({ project })` is already per project. The SDK's own `/api`
-routes stay phantom admin-only and unfiltered — the phantom admin sees everything.
+routes stay service-role-only and unfiltered — the service role sees everything.
 
 **Changes.** Migration 056 (the column, the FK, the constraint);
 `ProjectRow.organizationId`; `Projects.list(caller?)`, `get(id, caller?)`,
@@ -318,8 +318,8 @@ routes stay phantom admin-only and unfiltered — the phantom admin sees everyth
 `scopeOf(project)` (step 3) now carries the organization.
 
 **Proof.** User A's project is invisible to user B (`get`, `list`) and
-listed to the phantom admin; the same repo registered by both
-organizations, twice in one refused, the phantom admin's own still unique;
+listed to the service role; the same repo registered by both
+organizations, twice in one refused, the service role's own still unique;
 deleting an organization that owns a project is refused by name and the
 project untouched; once the project is gone the delete goes through and
 takes the organization's settings layer with it. A tool cannot name another
@@ -329,7 +329,7 @@ session's (`ToolCtx.project`).
 ### 5. Row-level security
 
 *Built:* `Database.queryAs(caller, sql, options)`, the `authenticated` role
-(`backend` carries BYPASSRLS — policies bind every role but the owner and
+(`service_role` carries BYPASSRLS — policies bind every role but the owner and
 BYPASSRLS roles, so the SDK's own reads and writes are untouched),
 `storage/sqlRunner.ts` shared with AgentDatabases, migration 057. The
 settings are `phantom.organization_id` / `phantom.user_id`
@@ -344,7 +344,7 @@ consumer it is dead code, so this step ships the consumer with it:
 **Trace.** A fifth role, `authenticated`: login, no ownership, `select /
 insert / update / delete` on the SDK's and the app's tables through
 policies only (`ensureRoles` creates it; default privileges from
-`migrator` grant it the same row access as `backend`). `queryAs` opens one
+`migrator` grant it the same row access as `service_role`). `queryAs` opens one
 connection as it, `begin; select set_config('phantom.organization_id', $1,
 true); set_config('phantom.user_id', $2, true)`, runs the caller's
 statements with the runner `AgentDatabases.query` already has (lifted
@@ -369,7 +369,7 @@ how it wants (a tool it registers, an `/app` route).
 **Proof.** As organization A, `select * from phantom_agent_sdk.projects`
 returns A's rows only, `update … where id = <B's>` touches 0 rows,
 `select * from phantom_agent_sdk.settings` returns nothing, `create
-table` is refused; as the phantom admin (`backend` role) everything is as
+table` is refused; as the service role (`service_role` role) everything is as
 before.
 
 ### 6. Password and OAuth sign-in
@@ -378,7 +378,7 @@ before.
 phantom-looper passes `AUTH_PASSWORD=1`, `AUTH_GITHUB_CLIENT_ID/SECRET`.
 
 **What.** Beside magic links: email + password, and GitHub / Google.
-Invite-only stays: nothing creates a user but the phantom admin and an
+Invite-only stays: nothing creates a user but the service role and an
 invitation.
 
 **Trace.** `identity.signIn: { password?: true; github?: { clientId,
@@ -397,7 +397,7 @@ change anyway. The client SDK (step 8) carries the three.
 **Changes.** `IdentityOptions.signIn`; four `Mailer` sends (step 7's door
 names them); `account` rows start being written.
 
-*Fixed in the proof:* a user the phantom admin or an invitation made is
+*Fixed in the proof:* a user the service role or an invitation made is
 unverified, and `requireEmailVerification` refused their password sign-in
 for ever — the reset did not verify them and nothing sent the verification
 mail. Now completing a reset verifies the address (`onPasswordReset`: the
@@ -405,7 +405,7 @@ link went there and was followed, as a magic link proves it), and an
 unverified password sign-in sends the verification link
 (`emailVerification.sendOnSignIn`).
 
-**Proof.** The phantom admin creates a user; they request a reset (mail), set a
+**Proof.** The service role creates a user; they request a reset (mail), set a
 password, sign in with it, `me` answers; a wrong password is refused; a
 stranger's `sign-up/email` is refused; a stranger's magic link answers 200
 and sends nothing. Not run: GitHub/Google (a test OAuth app is needed —
@@ -442,7 +442,7 @@ other three were the defaults. phantom-looper itself supplies none
 
 ### 8. Client SDK
 
-*Built:* `BackendOptions.credential` (`{ phantomAdminKey } | { sessionToken } |
+*Built:* `BackendOptions.credential` (`{ serviceRoleKey } | { sessionToken } |
 { apiKey }`) replaces `apiKey`; `backend.identity.auth` (Better Auth's
 client), `identity.me()`, `identity.verify(token)`.
 
@@ -455,7 +455,7 @@ wrapper is thin — the client SDK's `BackendClient` holds the credential
 and the origin; Better Auth's client rides it.
 
 ```ts
-const backend = new BackendClient({ url, credential: { phantomAdminKey } | { sessionToken } | { apiKey } });
+const backend = new BackendClient({ url, credential: { serviceRoleKey } | { sessionToken } | { userRoleKey } });
 backend.identity.me()                               // GET /api/identity/me → Caller
 backend.identity.auth                               // Better Auth's client: signIn.magicLink, magicLink.verify, signOut,
                                                     //   organization.*, apiKey.*, admin.*, signIn.email, signIn.social
@@ -463,13 +463,13 @@ backend.identity.verify(token)                      // the link's token → sess
 ```
 
 `apiKey` on `BackendClient` becomes `credential`: three kinds, one header
-each (`Authorization: Bearer` for the phantom admin's key and a session token,
+each (`Authorization: Bearer` for the service role's key and a session token,
 `x-api-key` for a Better Auth key). Paths under `/app/` go to the origin
 (already); `/api/auth/*` is the Better Auth client's own base.
 
 *Fixed in the proof:* three faults kept a client on a user's credential
 from working at all. `GET /health` — the version check every client makes
-first — admitted only the phantom admin's key: it now takes any caller
+first — admitted only the service role's key: it now takes any caller
 Identity knows. The Better Auth client got its headers as a function,
 which better-fetch ignores: no credential rode its calls (`onRequest` sets
 them now). And Node's fetch marks every request `sec-fetch-mode: cors`
@@ -480,7 +480,7 @@ always trusted (a browser ignores it and sends its real one).
 **Proof.** A script on the client SDK: `verify(link)` → `me()` → a user;
 `auth.organization.create` → `me()` names it; `auth.apiKey.create` → a
 second `BackendClient` on it → `me()`; the cli still connects with the
-phantom admin's key.
+service role's key.
 
 ### Order and size
 
@@ -496,7 +496,7 @@ construction: cli, looper, Telegram).
 
 - Media (database-backed files): its own plan, after part 2.
 - The SDK's own `/api` routes filtered per organization: they are the
-  phantom admin's; user space's `/app` routes are where a user's view is built
+  service role's; user space's `/app` routes are where a user's view is built
   (step 4's guard).
 - 2FA, passkeys: Better Auth plugins, added when asked.
 - Per-project membership inside an organization; sharing a session with a

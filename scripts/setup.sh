@@ -21,10 +21,11 @@ if [ ! -f .env ]; then
   PORT=$(free_port 8080)
   HTTPS_PORT=$(free_port 443)
   HTTP_PORT=$(free_port 80)
-  cat > .env <<ENV
+  # 0600 from the first byte: the file holds the service role key.
+  (umask 077; cat > .env <<ENV
 POSTGRES_USER=superuser
 POSTGRES_PASSWORD=$(openssl rand -hex 16)
-API_KEY=$(openssl rand -hex 24)
+SERVICE_ROLE_KEY=ph_service_role_$(openssl rand -hex 24)
 ENCRYPTION_KEY=$(openssl rand -base64 32)
 BACKEND_PORT=$PORT
 BACKEND_HTTPS_PORT=$HTTPS_PORT
@@ -33,12 +34,16 @@ BACKEND_ADDRESS=localhost
 BACKEND_TLS=internal
 COMPOSE_PROFILES=https
 ENV
+  )
   echo "wrote .env (api :$PORT, https :$HTTPS_PORT)"
 else
   echo ".env exists — keeping it"
 fi
 # shellcheck disable=SC1091
 source .env
+# The key rides into curl over stdin (-K -), never as an argument: an argument
+# is in `ps` for every user on the machine.
+authed_curl() { printf 'header = "authorization: Bearer %s"\n' "$SERVICE_ROLE_KEY" | curl -K - "$@"; }
 [ "${BACKEND_TLS:-}" = internal ] && [ "${COMPOSE_PROFILES:-}" = https ] \
   || { echo ".env must have BACKEND_TLS=internal and COMPOSE_PROFILES=https — dev runs the https stack (delete .env to regenerate)"; exit 1; }
 
@@ -50,11 +55,11 @@ docker compose up -d --build
 
 echo -n "waiting for api"
 for _ in $(seq 1 60); do
-  if curl -sf -H "authorization: Bearer $API_KEY" "http://127.0.0.1:${BACKEND_PORT:-8080}/api/health" >/dev/null 2>&1; then echo; break; fi
+  if authed_curl -sf "http://127.0.0.1:${BACKEND_PORT:-8080}/api/health" >/dev/null 2>&1; then echo; break; fi
   echo -n "."; sleep 1
 done
 
-curl -sf -H "authorization: Bearer $API_KEY" "http://127.0.0.1:${BACKEND_PORT:-8080}/api/health" >/dev/null \
+authed_curl -sf "http://127.0.0.1:${BACKEND_PORT:-8080}/api/health" >/dev/null \
   || { echo "api did not come up — docker compose logs api"; exit 1; }
 
 # Caddy's root certificate: minted on its first start, the one file the cli
@@ -73,24 +78,26 @@ done
 [ -s "$CA" ] || { echo "could not read caddy's root certificate — docker compose logs caddy"; exit 1; }
 
 # The path the cli takes, proven here: TLS on that root, HTTP/2, through Caddy.
-curl -sf --http2 --cacert "$CA" -H "authorization: Bearer $API_KEY" "$BASE/api/health" >/dev/null \
+authed_curl -sf --http2 --cacert "$CA" "$BASE/api/health" >/dev/null \
   || { echo "$BASE/health failed through caddy — docker compose logs caddy"; exit 1; }
 
 # Merge the connection into the cli's settings.json; other local keys survive.
-node -e '
+# The key reaches node through its environment, never an argument.
+SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY" node -e '
   const fs = require("node:fs"); const p = ".phantom-cli/settings.json";
   let cur = {}; try { cur = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
-  cur.server_url = process.argv[1]; cur.server_key = process.argv[2];
+  delete cur.server_key;
+  cur.server_url = process.argv[1]; cur.service_role_key = process.env.SERVICE_ROLE_KEY;
   fs.writeFileSync(p, JSON.stringify(cur, null, 2) + "\n", { mode: 0o600 });
   fs.chmodSync(p, 0o600);
-' "$BASE" "$API_KEY"
+' "$BASE"
 
 cat <<DONE
 
   phantom-looper is up on $BASE.
 
-  api key:    $API_KEY   (also written to .phantom-cli/settings.json)
-  root cert:  $CA        (caddy's own CA — the cli trusts it for localhost)
+  service role key:  in .env (SERVICE_ROLE_KEY), seated in .phantom-cli/settings.json
+  root cert:         $CA  (caddy's own CA — the cli trusts it for localhost)
 
   next: npm run phantom-cli — already connected; add a project, paste model
   keys on /keys, and drop a supervised card into plan to watch the looper.

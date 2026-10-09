@@ -54,7 +54,7 @@ export class Looper {
    *  the loop, the settings feed re-examines a project when a loop switch
    *  moves, the session feed re-runs a card when a hold is released. */
   constructor(private readonly backend: PhantomBackend, private readonly automation: CardAutomation) {
-    this.client = new BackendClient({ url: backend.loopback.url, credential: { phantomAdminKey: backend.loopback.apiKey }, clientId: CLIENT_ID, label: 'card run', actor: LOOPER_STARTER });
+    this.client = new BackendClient({ url: backend.loopback.url, credential: { serviceRoleKey: backend.loopback.serviceRoleKey }, clientId: CLIENT_ID, label: 'card run', actor: LOOPER_STARTER });
   }
 
   /** What an agent this looper runs tells it: errors and notices go to the log. */

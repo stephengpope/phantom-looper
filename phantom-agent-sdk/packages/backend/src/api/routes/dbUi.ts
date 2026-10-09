@@ -2,8 +2,8 @@
 // behind this server's own key.
 //
 // Gate: `db_ui_enabled` setting (read per request, flips without restart).
-// Auth: HTTP Basic (console_admin + the API key) — a browser cannot send a
-// bearer token by typing a URL, so this is the one path that speaks Basic.
+// Auth: HTTP Basic (service_role + the service role key) — a browser cannot
+// send a bearer token by typing a URL, so this is the one path that speaks Basic.
 // Past that the API injects X-User/X-Team and CloudBeaver — running with
 // reverseProxy as its only auth provider — auto-creates the admin account.
 // No second password exists anywhere.
@@ -21,8 +21,9 @@ const log = logger('db-ui');
 /** The path the console lives at, on this server's own address. */
 export const DB_UI_PREFIX = '/db';
 
-/** The user CloudBeaver knows you as. Auto-created on first request. */
-export const DB_UI_USER = 'console_admin';
+/** The user CloudBeaver knows you as — the service role, by its one name.
+ *  Auto-created on first request. */
+export const DB_UI_USER = 'service_role';
 
 /** CloudBeaver's built-in admin team. Sent as X-Team so the auto-created
  *  user lands with full rights rather than as a viewer. */
@@ -150,7 +151,7 @@ function ensureBootstrapped(base: string): Promise<void> {
 
 // ── route registration ───────────────────────────────────────────────────────
 
-export function dbUiRoutes(app: FastifyInstance, settings: Settings, apiKey: string) {
+export function dbUiRoutes(app: FastifyInstance, settings: Settings, serviceRoleKey: string) {
   const dbUiUrl = () => process.env.DB_UI_URL;
 
   const gate = async (req: FastifyRequest, reply: FastifyReply) => {
@@ -165,10 +166,10 @@ export function dbUiRoutes(app: FastifyInstance, settings: Settings, apiKey: str
     }
 
     const cred = parseBasic(req.headers.authorization);
-    if (!cred || cred.user !== DB_UI_USER || !timingSafeEqualStr(cred.pass, apiKey)) {
+    if (!cred || cred.user !== DB_UI_USER || !timingSafeEqualStr(cred.pass, serviceRoleKey)) {
       // ASCII only — Node rejects non-ASCII in header values.
       reply.header('www-authenticate',
-        `Basic realm="phantom-looper: user ${DB_UI_USER}, password: this server's API key", charset="UTF-8"`);
+        `Basic realm="phantom-looper: user ${DB_UI_USER}, password: the service role key", charset="UTF-8"`);
       return reply.code(401).send();
     }
 
@@ -200,7 +201,11 @@ export function dbUiRoutes(app: FastifyInstance, settings: Settings, apiKey: str
           const out = { ...headers };
           out['x-user'] = DB_UI_USER;
           out['x-team'] = DB_UI_TEAM;
+          // No credential of ours reaches the console: not the Basic login,
+          // not a user key a client happened to send. (Its own session cookie
+          // must pass, or nothing past the first request works.)
           delete out.authorization;
+          delete out['x-api-key'];
           return out;
         },
       },

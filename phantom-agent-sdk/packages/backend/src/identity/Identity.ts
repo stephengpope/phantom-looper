@@ -3,11 +3,11 @@
 // /api/auth/*), and the answer every other route wants: `callerOf(request)`.
 //
 // Off (no config.identity): no route, no row written, `callerOf` knows only
-// the phantom admin. On: people sign in by magic link (invite-only — a stranger's
+// the service role. On: people sign in by magic link (invite-only — a stranger's
 // email gets no mail and no account), every user has a personal organization
 // from their first sign-in and an invitation adds membership in another; a
-// cli carries the session token as a bearer, a program a long-lived API key.
-// The phantom admin's API key stays what it is and is a caller here too.
+// cli carries the session token as a bearer, a program a long-lived user role
+// key. The service role key stays what it is and is a caller here too.
 //
 // Who may see which project, session or row is NOT decided here — user space
 // gates its /app routes with `require` and writes its own rules.
@@ -29,6 +29,7 @@ import { organizationScope, userScope } from '../lib/scopes.js';
 import type { Acting } from '../lib/acting.js';
 import { user, session, account, verification, organization as organizationTable, member, invitation, apikey,
   type UserRow, type OrganizationRow } from '../storage/schema.js';
+import { USER_ROLE_KEY_PREFIX } from '@phantom-agent-sdk/client';
 import { timingSafeEqualStr } from '../lib/crypto.js';
 import { logger, errStr } from '../lib/log.js';
 
@@ -44,7 +45,7 @@ export interface IdentityOptions {
    *  credentials (CORS). The backend's own address is always trusted. */
   trustedOrigins?: string[];
   /** Ways in beside the magic link. Invite-only holds for each: nothing
-   *  creates a user but the phantom admin and an invitation. */
+   *  creates a user but the service role and an invitation. */
   signIn?: {
     /** Email + password. An invited user sets theirs through the reset
      *  flow (`request-password-reset` → mail → `reset-password`); an
@@ -93,12 +94,12 @@ const DEFAULT_MAIL: MailTemplates = {
 
 export type OrganizationRole = 'owner' | 'admin' | 'member';
 
-/** Who is calling: the phantom admin (the API key) or a signed-in user, in the
- *  organization their session is active in (an API key: the one it was made
- *  for). Sign-in opens a session in the user's first organization; they
+/** Who is calling: the service role (its key) or a signed-in user, in the
+ *  organization their session is active in (a user role key: the one it was
+ *  made for). Sign-in opens a session in the user's first organization; they
  *  switch it explicitly. */
 export type Caller =
-  | { type: 'phantom_admin' }
+  | { type: 'service_role' }
   | { type: 'user'; user: UserRow; organization: OrganizationRow; role: OrganizationRole };
 
 export class IdentityError extends Error {
@@ -116,7 +117,7 @@ interface AuthDeps {
   media: Media;
   options: IdentityOptions;
   baseUrl: string;
-  /** Magic links asked for by the phantom admin (bootstrap, no mail): the
+  /** Magic links asked for by the service role (bootstrap, no mail): the
    *  request's id → the resolver `sendMagicLink` hands the url to. */
   captures: Map<string, (url: string) => void>;
 }
@@ -266,9 +267,11 @@ function buildAuth({ database, mailer, settings, projects, media, options, baseU
       }),
       bearer(),
       admin(),
-      // A key is its user, in any organization they belong to (callerOf).
+      // A user role key is its user, in any organization they belong to
+      // (callerOf). Every one carries the prefix that says what it is
+      // (client identity.ts) — a caller never has to guess which header.
       // No per-key rate limit: a key gets the limits its user gets.
-      apiKey({ enableSessionForAPIKeys: true, rateLimit: { enabled: false } }),
+      apiKey({ enableSessionForAPIKeys: true, defaultPrefix: USER_ROLE_KEY_PREFIX, rateLimit: { enabled: false } }),
     ],
   });
   void auth.$context.then(ready);
@@ -292,12 +295,15 @@ export class Identity {
     options: IdentityOptions | undefined,
     /** The backend's public address (`https://host`): where the links point. */
     readonly baseUrl: string,
-    private readonly apiKey: string,
+    private readonly serviceRoleKey: string,
   ) {
     this.enabled = options !== undefined;
     this.trustedOrigins = options?.trustedOrigins ?? [];
     if (!options) return;
     if (options.secret.length < 32) throw new Error('identity.secret must be at least 32 characters (openssl rand -hex 24)');
+    // The session cookie is `secure` only on an https base URL: sign-in over
+    // plain http would hand every session to the wire. Refused at boot.
+    if (!baseUrl.startsWith('https:')) throw new Error(`sign-in needs an https address: set BACKEND_ADDRESS (the base URL is ${baseUrl})`);
     this.#auth = buildAuth({ database, mailer, settings, projects, media, options, baseUrl, captures: this.#captures });
   }
 
@@ -316,11 +322,11 @@ export class Identity {
     reply.send(response.body ? Buffer.from(await response.arrayBuffer()) : null);
   }
 
-  /** Who is calling: the phantom admin's key, or a Better Auth session (cookie,
-   *  bearer or API key) and the organization it is active in. Null: nobody. */
+  /** Who is calling: the service role key, or a Better Auth session (cookie,
+   *  bearer or user role key) and the organization it is active in. Null: nobody. */
   async callerOf(request: FastifyRequest): Promise<Caller | null> {
     const authorization = String(request.headers.authorization ?? '');
-    if (timingSafeEqualStr(authorization, `Bearer ${this.apiKey}`)) return { type: 'phantom_admin' };
+    if (timingSafeEqualStr(authorization, `Bearer ${this.serviceRoleKey}`)) return { type: 'service_role' };
     if (!this.#auth) return null;
     const signedIn = await this.#auth.api.getSession({ headers: fromNodeHeaders(request.headers) }).catch((error: unknown) => {
       log.warn({ err: errStr(error) }, 'session lookup failed'); return null;
@@ -328,7 +334,7 @@ export class Identity {
     if (!signedIn) return null;
     // A sign-in carries the organization it is active in. A key is its user
     // in any of their organizations: each call names one (the same header the
-    // server key uses, x-phantom-organization), or runs in their personal one.
+    // service role uses, x-phantom-organization), or runs in their personal one.
     const session = signedIn.session as { activeOrganizationId?: string | null };
     const named = request.headers['x-phantom-organization'];
     const activeId = request.headers['x-api-key']
@@ -349,7 +355,7 @@ export class Identity {
     return { type: 'user', user: membership.user, organization: membership.organization, role: membership.role as OrganizationRole };
   }
 
-  /** The server key acting for someone: an organization, and optionally a
+  /** The service role acting for someone: an organization, and optionally a
    *  user who must be its member. Null when either does not hold. */
   async actingFor(organizationId: string, userId?: string): Promise<Acting | null> {
     if (userId) {
@@ -361,7 +367,7 @@ export class Identity {
   }
 
   /** The caller, or `unauthorized` (a 401 once HttpApi's error handler sees
-   *  it). `users: true` refuses the phantom admin's key too. */
+   *  it). `users: true` refuses the service role key too. */
   async require(request: FastifyRequest, options: { users?: boolean } = {}): Promise<Caller> {
     const caller = await this.callerOf(request);
     if (!caller || (options.users && caller.type !== 'user')) throw new IdentityError('unauthorized', 'sign in first');
@@ -381,17 +387,17 @@ export class Identity {
     return (await this.database.system.select().from(user).where(eq(user.id, id)))[0];
   }
 
-  /** Bootstrap, the phantom admin's: a user with no mail involved. `email_taken`
+  /** Bootstrap, the service role's: a user with no mail involved. `email_taken`
    *  when one has that address. */
   async createUser(fields: { email: string; name?: string }): Promise<UserRow> {
     const context = await this.#on.$context;
     if (await context.internalAdapter.findUserByEmail(fields.email)) throw new IdentityError('email_taken', `a user with email ${fields.email} exists`);
     const created = await context.internalAdapter.createUser({ email: fields.email, name: fields.name ?? fields.email }, { method: 'admin' });
-    log.info({ email: fields.email }, 'user created by the phantom admin');
+    log.info({ email: fields.email }, 'user created by the service role');
     return (await this.database.system.select().from(user).where(eq(user.id, created.id)))[0];
   }
 
-  /** Bootstrap, the phantom admin's: the magic link for `email`, handed back
+  /** Bootstrap, the service role's: the magic link for `email`, handed back
    *  instead of mailed (no SMTP yet, or a link to paste). The link signs
    *  the user in on a click or on `GET` without a callbackURL. */
   async magicLink(email: string): Promise<string> {

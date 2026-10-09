@@ -16,9 +16,9 @@ export type OverridableLayer = Exclude<Layer, 'global'>;
 import { acting } from './acting.js';
 
 export const GLOBAL = 'global';
-/** The server key's own organization (migration 059): what it owns when it
- *  makes something without naming anyone. A real row, never null. */
-export const OPERATOR_ORGANIZATION = 'operator';
+/** The service role's own organization (migrations 059, 063): what it owns
+ *  when it makes something without naming anyone. A real row, never null. */
+export const SERVICE_ROLE_ORGANIZATION = 'service_role';
 export const organizationScope = (id: string) => `organization:${id}`;
 export const userScope = (id: string) => `user:${id}`;
 export const projectScope = (id: string) => `project:${id}`;
@@ -38,7 +38,7 @@ export const scopeOf = (project: { id: string; organizationId: string }): Settin
 };
 
 /** The scope for work in no particular project: the acting organization
- *  and user (lib/acting.ts); global only for the server key's own. */
+ *  and user (lib/acting.ts); global only for the service role's own. */
 export const actingScope = (): SettingScope => {
   const who = acting();
   return who ? { organizationId: who.organizationId, ...(who.userId ? { userId: who.userId } : {}) } : {};

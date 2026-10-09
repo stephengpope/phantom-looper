@@ -150,7 +150,7 @@ fi
 # some, its startup data and credentials). Agent containers sit on their own
 # bridge, named phantom-agents (AGENT_NETWORK in the compose file); traffic
 # from it to that address is dropped in DOCKER-USER, the chain Docker leaves
-# to the operator. A boot-time unit puts the rule back after every reboot and
+# to you. A boot-time unit puts the rule back after every reboot and
 # every docker restart. Not optional, unlike ufw: it never blocks anything
 # the server itself needs.
 if command -v systemctl >/dev/null 2>&1 && command -v iptables >/dev/null 2>&1; then
@@ -224,16 +224,21 @@ esac
 
 # ── .env — secrets generated once; passed flags update in place ──────────────
 ENV_FILE="$DIR/.env"
-# One-time: the server's variables were PHANTOM_BACKEND_*; they are BACKEND_*.
-# Rename the old lines in .env (an old line whose new name is already there
-# is dropped). The compose file reads the old names for exactly this one
-# upgrade, so nothing runs without its values in between.
+# One-time renames of .env lines, each for exactly one upgrade (the compose
+# file reads the old name too, so nothing runs without its value in between):
+#   PHANTOM_BACKEND_*  ->  BACKEND_*
+#   API_KEY            ->  SERVICE_ROLE_KEY, with the prefix every key now
+#                          carries (ph_service_role_); a cli that holds the
+#                          old value gives it the same prefix (local.ts), so
+#                          the two still match.
+# An old line whose new name is already there is dropped.
 rename_env() {
-  [ -f "$1" ] && grep -q '^PHANTOM_BACKEND_' "$1" || return 0
-  awk -F= 'NR == FNR { if ($1 ~ /^BACKEND_/) have[$1] = 1; next }
+  [ -f "$1" ] && grep -Eq '^(PHANTOM_BACKEND_|API_KEY=)' "$1" || return 0
+  awk -F= 'NR == FNR { if ($1 ~ /^BACKEND_/ || $1 == "SERVICE_ROLE_KEY") have[$1] = 1; next }
     $1 ~ /^PHANTOM_BACKEND_/ { name = substr($1, 9); if (name in have) next; sub(/^PHANTOM_/, "") }
+    $1 == "API_KEY" { if ("SERVICE_ROLE_KEY" in have) next; value = substr($0, 9); if (value !~ /^ph_service_role_/) value = "ph_service_role_" value; $0 = "SERVICE_ROLE_KEY=" value }
     { print }' "$1" "$1" > "$1.tmp" && chmod 600 "$1.tmp" && mv "$1.tmp" "$1" \
-    && echo "renamed the PHANTOM_BACKEND_* lines in $1 to BACKEND_*"
+    && echo "renamed the old lines in $1 (PHANTOM_BACKEND_* -> BACKEND_*, API_KEY -> SERVICE_ROLE_KEY)"
 }
 rename_env "$ENV_FILE"
 
@@ -246,7 +251,7 @@ env_set() {
 
 if $SUDO test -f "$ENV_FILE"; then
   ok ".env exists — secrets kept (delete $ENV_FILE to regenerate)"
-  API_KEY_SHOWN="(unchanged — phantom-backend key)"
+  KEY_SHOWN="(unchanged — phantom-backend key)"
   [ "$ADDRESS_SET" -eq 1 ] && env_set BACKEND_ADDRESS "$ADDRESS"
   [ "$CERT_EMAIL_SET" -eq 1 ] && env_set BACKEND_CERT_EMAIL "$CERT_EMAIL"
   [ -n "$TLS" ] && env_set BACKEND_TLS "$TLS"
@@ -281,11 +286,12 @@ else
     CERT_EMAIL="$ANSWER"
   fi
   rand_hex() { head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
-  API_KEY_SHOWN=$(rand_hex 24)
+  # The service role key: its prefix says what it is wherever it is read.
+  KEY_SHOWN="ph_service_role_$(rand_hex 24)"
   $SUDO sh -c "umask 077; cat > '$ENV_FILE'" <<EOF
 POSTGRES_USER=superuser
 POSTGRES_PASSWORD=$(rand_hex 16)
-API_KEY=$API_KEY_SHOWN
+SERVICE_ROLE_KEY=$KEY_SHOWN
 ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64)
 BACKEND_ADDRESS=$ADDRESS
 BACKEND_CERT_EMAIL=$CERT_EMAIL
@@ -318,7 +324,7 @@ say "Waiting for the api to come up..."
 # /health requires the token like every other route (setup.sh learned this
 # live; found again here by the provisioning rig). The key goes in over
 # stdin (-K -), so it never appears in `ps`.
-KEY=$(env_get API_KEY)
+KEY=$(env_get SERVICE_ROLE_KEY)
 i=0
 until printf 'header = "authorization: Bearer %s"\n' "$KEY" \
       | curl -fsS -K - "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; do
@@ -340,8 +346,8 @@ $SUDO env BACKEND_DIR="$DIR" phantom-backend check || true
 # ── Done ────────────────────────────────────────────────────────────────────
 ADDRESS=$(env_get BACKEND_ADDRESS)
 printf '\n\033[0;32m✓ Install complete.\033[0m\n\n'
-printf '  Server URL:  https://%s\n' "$ADDRESS"
-printf '  API key:     %s\n' "$API_KEY_SHOWN"
+printf '  Server URL:        https://%s\n' "$ADDRESS"
+printf '  Service role key:  %s\n' "$KEY_SHOWN"
 printf '\nNotes:\n'
 printf '  - Ports 80 + 443 must be open (cloud firewall / security group).\n'
 printf '  - The API docs are not served publicly. Reach them over a tunnel:\n'

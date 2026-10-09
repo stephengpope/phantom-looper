@@ -1,6 +1,6 @@
 // The Telegram bot's BEHAVIOUR: modes, commands, which turn to run, alerts —
 // on the SDK's TelegramBot (the link, verified inbound, delivery) and the
-// client SDK's agents over loopback. Every linked chat (the operator's, each
+// client SDK's agents over loopback. Every linked chat (the service role's, each
 // user's private chat, a project's group) is its own: its own state row, its
 // own assistant conversation, and everything in it runs as the chat's user —
 // their organization's rows, their keys (actAs, the agents' actingFor). Two
@@ -31,7 +31,7 @@ import { UpgradeChecker } from '@phantom-agent-sdk/backend';
 import { TelegramAssistantState, type TelegramAssistantStateRow, type TelegramMode } from './TelegramAssistantState.js';
 import { menuFor, handleCommand } from './commands.js';
 import { AUTO_PUSH_STEPS, AUTO_PULL_STEPS, type AutoPushOutcome, type AutoPullOutcome } from '../../phantom-looper/agents/assistant/gitSteps.js';
-import { scopeOf, actAs, OPERATOR_ORGANIZATION, type ChatLink } from '@phantom-agent-sdk/backend';
+import { scopeOf, actAs, SERVICE_ROLE_ORGANIZATION, type ChatLink } from '@phantom-agent-sdk/backend';
 
 
 const log = logger('telegram');
@@ -56,7 +56,7 @@ interface InFlightTurn { agent: Agent }
 export class TelegramAssistantBot {
   private inFlight = new Map<string, InFlightTurn>();
   /** One client per chat's user — this bot's lock identity, acting for them
-   *  (the operator's chat: the server key's own). */
+   *  (the service role's chat: the server's own). */
   private readonly clients = new Map<string, BackendClient>();
   /** The bot's behaviour row: who answers, which session and project it points at. */
   readonly state: TelegramAssistantState;
@@ -114,18 +114,18 @@ export class TelegramAssistantBot {
   private clientFor(link: ChatLink): BackendClient {
     let client = this.clients.get(link.id);
     if (!client) {
-      client = new BackendClient({ url: this.backend.loopback.url, credential: { phantomAdminKey: this.backend.loopback.apiKey },
+      client = new BackendClient({ url: this.backend.loopback.url, credential: { serviceRoleKey: this.backend.loopback.serviceRoleKey },
         clientId: CLIENT_ID, label: 'telegram', actor: TELEGRAM_STARTER,
-        ...(link.operator ? {} : { actingFor: { organizationId: link.organizationId, ...(link.userId ? { userId: link.userId } : {}) } }) });
+        ...(link.serviceRole ? {} : { actingFor: { organizationId: link.organizationId, ...(link.userId ? { userId: link.userId } : {}) } }) });
       this.clients.set(link.id, client);
     }
     return client;
   }
 
   /** Run `work` as the chat's user: the backend's own reads and writes are
-   *  then theirs alone. The operator's chat is the server's own. */
+   *  then theirs alone. The service role's chat is the server's own. */
   private asChat<T>(link: ChatLink, work: () => Promise<T>): Promise<T> {
-    return link.operator ? work() : actAs({ organizationId: link.organizationId, userId: link.userId }, work);
+    return link.serviceRole ? work() : actAs({ organizationId: link.organizationId, userId: link.userId }, work);
   }
 
   /** A chat linked to one project always points at it. */
@@ -153,9 +153,9 @@ export class TelegramAssistantBot {
     const token = await this.backend.telegramBot.token();
     if (!token) return;
     const coder = await this.backend.sessions.ownerOnCard(projectId, alertMsg.number);
-    // The card's chat: its coding session's owner's; the operator's for the operator's own projects.
+    // The card's chat: its coding session's owner's; the service role's for its own projects.
     const chatId = coder ? await this.backend.telegramBot.chatForSession(coder.id)
-      : project.organizationId === OPERATOR_ORGANIZATION ? await this.backend.telegramBot.authorizedUser() : null;
+      : project.organizationId === SERVICE_ROLE_ORGANIZATION ? await this.backend.telegramBot.authorizedUser() : null;
     if (!chatId) return;
     const client = this.backend.telegramBot.clientForChat(token, chatId, () => coder?.id ?? null);
     await client.sendMessage(chatId, alertMsg.text);

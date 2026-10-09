@@ -61,7 +61,7 @@ export const HIDDEN: Record<string, (values: Record<string, unknown>) => boolean
   supervisor_base_url: (values) => !usesBaseUrl(set(values.supervisor_provider) ?? values.coding_provider),
   voice_wake_words: (values) => values.voice_wake_word !== true,
   voice_wake_timeout: (values) => values.voice_wake_word !== true,
-  // The API docs are a server operator's switch (PATCH /api/settings), not this app's.
+  // The API docs are the service role's switch (PATCH /api/settings), not this app's.
   api_docs_enabled: () => true,
 };
 

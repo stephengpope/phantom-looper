@@ -6,6 +6,7 @@
 // same one. Reads here are synchronous because a file read is; a call site can
 // tell which kind it is by whether it awaits.
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { SERVICE_ROLE_KEY_PREFIX, USER_ROLE_KEY_PREFIX } from '@phantom-agent-sdk/client';
 import { dirname } from 'node:path';
 import {
   CONFIG_PATH, DEFAULTS, META, LOCAL_KEYS, validate,
@@ -29,7 +30,17 @@ export function readOverrides(path = CONFIG_PATH): { overrides: Record<string, C
   // the part that can go.
   catch (fromEnv) { return { overrides: {}, error: `settings file is not valid JSON — using defaults; it has not been touched (${path}: ${(fromEnv as Error).message})` }; }
   if (!parsed || typeof parsed !== 'object') return { overrides: {}, error: `settings file is not an object — using defaults (${path})` };
-  return { overrides: parsed as Record<string, ConfigValue>, error: undefined };
+  const overrides = parsed as Record<string, ConfigValue>;
+  // One-time: the key was `server_key`, and carried no prefix. The server's
+  // updater gives its copy the same prefix (updater/watch.sh), so the two
+  // still match. Written back at once, so the old name is gone from disk.
+  if (typeof overrides.server_key === 'string' && overrides.service_role_key === undefined) {
+    const old = overrides.server_key;
+    overrides.service_role_key = old.startsWith(SERVICE_ROLE_KEY_PREFIX) || old.startsWith(USER_ROLE_KEY_PREFIX) ? old : `${SERVICE_ROLE_KEY_PREFIX}${old}`;
+    delete overrides.server_key;
+    writeOverrides(overrides, path);
+  }
+  return { overrides, error: undefined };
 }
 
 function envValue(key: LocalKey, env: NodeJS.ProcessEnv): { value: string; envVar: string } | undefined {
@@ -73,9 +84,9 @@ export function localValues(path = CONFIG_PATH, env: NodeJS.ProcessEnv = process
 
 /** 0600 is applied with an explicit chmod, NOT the writeFileSync mode option:
  *  that option is ignored when the file already exists, so a settings.json that
- *  was ever 0644 would silently stay 0644 while holding the API key. The write
+ *  was ever 0644 would silently stay 0644 while holding the key. The write
  *  is tmp-then-rename: a crash lands the old file or the new one, never half
- *  of one — this file holds the API key. */
+ *  of one — this file holds the key. */
 function writeOverrides(overrides: Record<string, ConfigValue>, path = CONFIG_PATH): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = `${path}.tmp`;

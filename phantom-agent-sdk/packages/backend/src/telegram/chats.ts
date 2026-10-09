@@ -1,7 +1,7 @@
 // `telegram_chats` and `telegram_link_codes` (061): which chat is whose. A
 // user's app asks for a link (a one-time code, shown as t.me/<bot>?start=…);
 // the chat that sends it to the bot becomes theirs — their private chat, or
-// a group for one project. The operator's own chat is not a row: it is the
+// a group for one project. The service role's own chat is not a row: it is the
 // `telegram_authorized_user` setting, as the cli has always set it.
 //
 // Reads and writes for a user go through the acting handle (the policies
@@ -12,11 +12,11 @@ import { and, eq, gt, lt, sql } from 'drizzle-orm';
 import { newId } from '@phantom-agent-sdk/client';
 import type { Drizzle } from '../storage/Database.js';
 import { telegramChats, telegramLinkCodes, type TelegramChatRow } from '../storage/schema.js';
-import { OPERATOR_ORGANIZATION } from '../lib/scopes.js';
+import { SERVICE_ROLE_ORGANIZATION } from '../lib/scopes.js';
 
 const CODE_MINUTES = 10;
 
-/** Who a chat speaks for. `operator`: the server's own chat (the setting). */
+/** Who a chat speaks for. `serviceRole`: the server's own chat (the setting). */
 export interface ChatLink {
   id: string;
   chatId: number;
@@ -24,15 +24,15 @@ export interface ChatLink {
   organizationId: string;
   userId: string | null;
   projectId: string | null;
-  operator: boolean;
+  serviceRole: boolean;
 }
 
 const fromRow = (row: TelegramChatRow): ChatLink => ({ id: row.id, chatId: row.chatId, telegramUserId: row.telegramUserId,
-  organizationId: row.organizationId, userId: row.userId, projectId: row.projectId, operator: false });
+  organizationId: row.organizationId, userId: row.userId, projectId: row.projectId, serviceRole: false });
 
-/** The operator's chat, from the setting: private, so chat id = their Telegram id. */
-export const operatorLink = (chatId: number): ChatLink => ({ id: 'operator', chatId, telegramUserId: chatId,
-  organizationId: OPERATOR_ORGANIZATION, userId: null, projectId: null, operator: true });
+/** The service role's chat, from the setting: private, so chat id = their Telegram id. */
+export const serviceRoleLink = (chatId: number): ChatLink => ({ id: 'service_role', chatId, telegramUserId: chatId,
+  organizationId: SERVICE_ROLE_ORGANIZATION, userId: null, projectId: null, serviceRole: true });
 
 export class TelegramChats {
   /** `database`: the acting handle (a user's own rows); `system`: the

@@ -11,7 +11,7 @@
 //   THE LINK   a host's hello (its row), its feed (jobs down), its relay
 //              (events up) — the routes call in here.
 //
-// A host is what its key makes it: the root API key registers a SHARED host
+// A host is what its key makes it: the service role key registers a SHARED host
 // (any user's workspace may land there); a user's key registers a USER
 // host (only that user's). The rows live in session_hosts, read and written
 // as the backend itself — a user never queries them directly.
@@ -30,7 +30,7 @@ import { logger } from '../lib/log.js';
 
 const log = logger('session-hosts');
 
-/** Who is talking to the hosts API: the root API key (every host is theirs),
+/** Who is talking to the hosts API: the service role (every host is theirs),
  *  or a user (their own hosts). */
 export interface HostCaller { admin: boolean; userId: string | null }
 
@@ -175,7 +175,7 @@ export class SessionHosts {
   }
 
   /** A host says hello: its row made or found. The row's owner is the
-   *  caller: the root API key's hosts are shared, a user's are theirs. A
+   *  caller: the service role's hosts are shared, a user's are theirs. A
    *  persisted id that names someone else's row is refused. */
   async hello(caller: HostCaller, hello: HostHello): Promise<SessionHostRow> {
     const ownerUserId = caller.admin ? null : caller.userId;
@@ -235,7 +235,7 @@ export class SessionHosts {
     return row;
   }
 
-  /** The hosts a caller may see: the root API key sees all; a user sees their
+  /** The hosts a caller may see: the service role sees all; a user sees their
    *  own and the shared ones. */
   async list(caller: HostCaller): Promise<SessionHostView[]> {
     const rows = await this.database.select().from(sessionHosts);

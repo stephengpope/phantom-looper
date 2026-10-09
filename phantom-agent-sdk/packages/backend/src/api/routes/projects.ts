@@ -134,7 +134,7 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
             `# ${name}\n\nCreated by phantom-looper.\n`);
         } catch (error) {
           // The project exists now but is empty. Say exactly what stopped the seed
-          // so the phantom admin can fix the token and re-run with create=false.
+          // so the service role can fix the token and re-run with create=false.
           const why = classifyGitFailure(error, { hadToken: true });
           const msg = why?.message ?? String((error as { stderr?: string }).stderr ?? (error as Error).message).trim().slice(0, 200);
           return reply.code(why?.code === 'upstream_unreachable' ? 502 : 400).send(

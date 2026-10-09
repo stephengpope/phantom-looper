@@ -1,12 +1,13 @@
 # A SESSION HOST: a box that runs workspaces for a phantom-backend somewhere
 # else. The same image as the API with the host entrypoint, the same named
-# volume, the same socket proxy — on a server an operator runs, or on a Mac
+# volume, the same socket proxy — on a server someone runs, or on a Mac
 # (`phantom host start` writes this file's .env and runs it).
 #
 # The host connects OUT to the backend; nothing listens here. Three values in
-# .env say everything: BACKEND_URL, BACKEND_KEY (the root API key makes a SHARED
-# host any workspace may land on; a user's API key makes THEIR host, for their
-# workspaces alone), and HOST_NAME (a label; defaults to the container's).
+# .env say everything: BACKEND_URL, BACKEND_KEY (the service role key makes a
+# SHARED host any workspace may land on; a user role key makes THEIR host, for
+# their workspaces alone — the key's prefix says which), and HOST_NAME (a
+# label; defaults to the container's).
 name: phantom-backend-session-host
 
 services:
@@ -25,7 +26,7 @@ services:
       disable: true
     environment:
       BACKEND_URL: ${BACKEND_URL:?set in .env — the backend's https address}
-      BACKEND_KEY: ${BACKEND_KEY:?set in .env — the root API key or your API key}
+      BACKEND_KEY: ${BACKEND_KEY:?set in .env — the service role key or your user role key}
       HOST_NAME: ${HOST_NAME:-}
       # A backend on its own CA (BACKEND_TLS=internal): its root certificate, PEM.
       BACKEND_CA: ${BACKEND_CA:-}

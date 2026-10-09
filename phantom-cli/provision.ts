@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
 import { request as httpRequest } from 'node:http';
 import { join, resolve } from 'node:path';
+import { credentialHeaders, credentialOf } from '@phantom-agent-sdk/client';
 import { CONFIG_DIR } from './config.js';
 import { APP_VERSION, REPO, parseVersion } from './selfUpdate.js';
 
@@ -191,12 +192,12 @@ export interface ServerFacts { address: string; port: number; tls: string; key: 
 // when not root, exactly as the installer itself decides.
 const FACTS_CMD = [
   'S=""; [ "$(id -u)" -ne 0 ] && S=sudo;',
-  '$S sh -c \'for k in BACKEND_ADDRESS BACKEND_PORT BACKEND_TLS API_KEY;',
+  '$S sh -c \'for k in BACKEND_ADDRESS BACKEND_PORT BACKEND_TLS SERVICE_ROLE_KEY;',
   'do printf "PHANTOM_FACT %s=%s\\n" "$k" "$(grep "^$k=" "${BACKEND_DIR:-/opt/phantom-looper}/.env" | head -1 | cut -d= -f2-)"; done\'',
 ].join(' ');
 
 /** Read back what the installer wrote: the address the certificate was issued
- *  for (the URL must be that exact string), the TLS mode, and the API key.
+ *  for (the URL must be that exact string), the TLS mode, and the service role key.
  *  The key crosses only the encrypted ssh channel — never an argv, never a
  *  shell history line. */
 export async function readServerFacts(target: Target, opts: SshOpts = {}): Promise<ServerFacts> {
@@ -209,8 +210,8 @@ export async function readServerFacts(target: Target, opts: SshOpts = {}): Promi
     if (match) facts[match[1]] = match[2];
   }
   const address = facts.BACKEND_ADDRESS ?? '';
-  const key = facts.API_KEY ?? '';
-  if (!address || !key) throw new Error('the box answered, but /opt/phantom-looper/.env has no address or API key — did the install finish?');
+  const key = facts.SERVICE_ROLE_KEY ?? '';
+  if (!address || !key) throw new Error('the box answered, but /opt/phantom-looper/.env has no address or service role key — did the install finish?');
   return { address, port: Number(facts.BACKEND_PORT || 8080), tls: facts.BACKEND_TLS || 'public', key };
 }
 
@@ -235,6 +236,10 @@ const routeUrl = (base: string, path: string) => new URL(path.startsWith('/app/'
  *  cannot serve: a CA to pin before the app's dispatcher is wired (setup), a
  *  route to call before the app renders (update --server). Generic
  *  method+path — the /settings route names live in settings.ts. */
+/** The header a key rides in — which one, its prefix says (a key with no
+ *  prefix is sent as the service role's, and refused by the server). */
+const keyHeaders = (key: string) => credentialHeaders(credentialOf(key) ?? { serviceRoleKey: key });
+
 export function apiFor(base: string, key: string, certificateAuthority?: string) {
   return (method: string, path: string, body?: unknown) =>
     new Promise<unknown>((resolvePromise, reject) => {
@@ -242,7 +247,7 @@ export function apiFor(base: string, key: string, certificateAuthority?: string)
       const req = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
         method,
         headers: {
-          authorization: `Bearer ${key}`,
+          ...keyHeaders(key),
           ...(body === undefined ? {} : { 'content-type': 'application/json' }),
         },
         timeout: 15_000,
@@ -277,7 +282,7 @@ export function streamFor(base: string, key: string, certificateAuthority?: stri
       const req = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
         method: 'POST',
         headers: {
-          authorization: `Bearer ${key}`,
+          ...keyHeaders(key),
           'content-type': 'application/json',
         },
         ...(certificateAuthority ? { ca: certificateAuthority } : {}),
@@ -325,7 +330,7 @@ export function verifyFromHere(url: string, key: string, certificateAuthority?: 
     try { base = new URL(url); } catch { return resolvePromise({ ok: false, reason: `not a URL: ${url}` }); }
     const req = (base.protocol === 'https:' ? httpsRequest : httpRequest)(
       new URL('/api/health', base),
-      { headers: { authorization: `Bearer ${key}` }, timeout: timeoutMs, ...(certificateAuthority ? { ca: certificateAuthority } : {}) },
+      { headers: keyHeaders(key), timeout: timeoutMs, ...(certificateAuthority ? { ca: certificateAuthority } : {}) },
       (res) => {
         let body = '';
         res.on('data', (chunk) => { body += chunk; });

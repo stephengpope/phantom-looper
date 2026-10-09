@@ -54,11 +54,11 @@ export const projects = phantomAgentSdk.table('projects', {
   // a deleted card's stays taken. (024; Projects.claimCardNumber moves it.)
   nextCardNumber: integer('next_card_number').notNull().default(1),
   // The organization this project belongs to (056, 059): the caller's, or
-  // 'operator' — the root API key's own. Everything under the project takes
+  // 'service_role' — the service role's own. Everything under the project takes
   // it (059's triggers). Its settings layer rides in the project's chain
   // (scopes.ts scopeOf).
-  organizationId: text('organization_id').notNull().default(sql`coalesce(phantom_agent_sdk.caller_organization(), phantom_agent_sdk.operator_organization())`),
-  // Who made it (059); null = the operator, or a user since deleted.
+  organizationId: text('organization_id').notNull().default(sql`coalesce(phantom_agent_sdk.caller_organization(), phantom_agent_sdk.service_role_organization())`),
+  // Who made it (059); null = the service role, or a user since deleted.
   userId: text('user_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -136,7 +136,7 @@ export const workspaces = phantomAgentSdk.table('workspaces', {
 
 // A SESSION HOST (062): a box running Docker and a workspace volume that
 // connects OUT to this server and runs workspaces for it. Shared (owner
-// null: registered with the root API key, any workspace may land there) or
+// null: registered with the service role key, any workspace may land there) or
 // a user host (a user's: only their workspaces). `boot` is the host process's
 // id — a reconnect carries the same one, a restart a new one. `facts` is
 // what the box reported at hello (host/protocol.ts HostFacts).
@@ -274,7 +274,7 @@ export const telegramChats = phantomAgentSdk.table('telegram_chats', {
   id: text('id').primaryKey(),
   chatId: bigint('chat_id', { mode: 'number' }).notNull(),
   telegramUserId: bigint('telegram_user_id', { mode: 'number' }).notNull(),
-  organizationId: text('organization_id').notNull().default(sql`coalesce(phantom_agent_sdk.caller_organization(), phantom_agent_sdk.operator_organization())`),
+  organizationId: text('organization_id').notNull().default(sql`coalesce(phantom_agent_sdk.caller_organization(), phantom_agent_sdk.service_role_organization())`),
   userId: text('user_id'),
   projectId: text('project_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -284,7 +284,7 @@ export type TelegramChatRow = typeof telegramChats.$inferSelect;
 // A link in waiting (061): a one-time code, ten minutes.
 export const telegramLinkCodes = phantomAgentSdk.table('telegram_link_codes', {
   code: text('code').primaryKey(),
-  organizationId: text('organization_id').notNull().default(sql`coalesce(phantom_agent_sdk.caller_organization(), phantom_agent_sdk.operator_organization())`),
+  organizationId: text('organization_id').notNull().default(sql`coalesce(phantom_agent_sdk.caller_organization(), phantom_agent_sdk.service_role_organization())`),
   userId: text('user_id'),
   projectId: text('project_id'),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
@@ -340,11 +340,11 @@ export type PresetRow = typeof presets.$inferSelect;
 
 // Media (058): tracked files on S3-compatible storage. The row is the file;
 // the bucket holds its bytes at `key`. Owner is the organization
-// ('operator' = the root API key's own); `userId` is who uploaded it.
+// ('service_role' = the service role's own); `userId` is who uploaded it.
 // media/Media.ts is the one owner.
 export const media = phantomAgentSdk.table('media', {
   id: text('id').primaryKey(),
-  organizationId: text('organization_id').notNull().default(sql`coalesce(phantom_agent_sdk.caller_organization(), phantom_agent_sdk.operator_organization())`),
+  organizationId: text('organization_id').notNull().default(sql`coalesce(phantom_agent_sdk.caller_organization(), phantom_agent_sdk.service_role_organization())`),
   userId: text('user_id'),
   projectId: text('project_id'),
   sessionId: text('session_id'),
@@ -372,7 +372,7 @@ export const tokenUsage = phantomAgentSdk.table('token_usage', {
   sessionId: text('session_id'),
   // Whose spend (059): the session's organization and project when it names
   // one (a trigger fills them), else the caller's; the user whose turn it was.
-  organizationId: text('organization_id').notNull().default(sql`coalesce(phantom_agent_sdk.caller_organization(), phantom_agent_sdk.operator_organization())`),
+  organizationId: text('organization_id').notNull().default(sql`coalesce(phantom_agent_sdk.caller_organization(), phantom_agent_sdk.service_role_organization())`),
   projectId: text('project_id'),
   userId: text('user_id'),
   type: text('type').notNull(),
@@ -401,7 +401,7 @@ export const crons = phantomAgentSdk.table('crons', {
   id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
   project_id: text('project_id').notNull(),
   // Who made it (059): a run is theirs — the scheduler acts for them, so
-  // their keys come first. Null = the operator, or a user since deleted.
+  // their keys come first. Null = the service role, or a user since deleted.
   user_id: text('user_id'),
   name: text('name').notNull(),   // the handle — unique per project, case-insensitively
   schedule: text('schedule').notNull(),

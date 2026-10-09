@@ -1,6 +1,6 @@
 // `phantom-cli host` — a session host on THIS machine: a box that runs your
 // workspaces for the backend you are paired with. Docker runs it, from the
-// same compose file an operator runs on a server (session-host/ in the
+// same compose file a server runs (session-host/ in the
 // release image): `start` extracts that file from the release's image,
 // writes its .env from the pairing (the url, the key, this machine's name),
 // and brings it up; `stop` takes it down (the volume stays); `status` asks
@@ -11,9 +11,9 @@
 //   phantom-cli host status
 //   phantom-cli host logs
 //
-// The key is the one the cli holds: the root API key makes a SHARED host (any
-// workspace may land here); your own API key makes YOUR host (your
-// workspaces alone). Nothing listens on this machine — the host dials out.
+// The key is the one the cli holds: the service role key makes a SHARED host
+// (any workspace may land here); your own user role key makes YOUR host (your
+// workspaces alone). The key's prefix says which. Nothing listens on this machine — the host dials out.
 import { existsSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { hostname } from 'node:os';
@@ -39,7 +39,7 @@ function flag(args: string[], name: string): string | undefined {
 }
 
 /** The compose file and its .env, from the release image: the same files an
- *  operator's server runs. Extracted with `docker cp` out of a created
+ *  server runs. Extracted with `docker cp` out of a created
  *  container, as updater/apply.sh does — the image is the one artifact. */
 function extractComposeFiles(tag: string): void {
   mkdirSync(HOST_DIR, { recursive: true, mode: 0o700 });
@@ -81,7 +81,7 @@ export async function runHost(args: string[]): Promise<number> {
 
   const local = localValues();
   const url = String(local.server_url ?? '');
-  const key = String(local.server_key ?? '');
+  const key = String(local.service_role_key ?? '');
   if (!url || !key) { console.error('no backend paired — run setup-backend, or /server in the app'); return 1; }
 
   if (command === 'start') {

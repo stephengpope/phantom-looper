@@ -2,18 +2,18 @@
 // {ok:false, error:{code, message, retryable}}), and three prefixes that say
 // who owns a route and who may call it (docs/multi-user.md):
 //
-//   /api/*       the SDK's routes: the server key, or a user (sign-in token
-//                or user API key)
+//   /api/*       the SDK's routes: the service role key, or a user (sign-in
+//                token or user API key)
 //   /api/auth/*  Identity (Better Auth): sign-in, organizations, invitations,
 //                keys — public, or the user's own token
 //   /app/*       user space's routes (config.routes); anyone reaches them —
 //                the app gates each with backend.identity.require
 //
 // THE front step (docs/permissions.md), on /api and /app alike: who is
-// calling, and who the work is for. A user's request — or the server key's
+// calling, and who the work is for. A user's request — or the service role's
 // naming one with x-phantom-organization / x-phantom-user — runs as that
 // organization and user (lib/acting.ts): every query it makes is fenced by
-// the row-level policies, and nothing else decides. The server key alone
+// the row-level policies, and nothing else decides. The service role alone
 // runs as itself and sees everything. A user gets one refusal for anything
 // they may not reach — `403 access denied`, the same whether the thing is
 // missing or not theirs — shaped here and nowhere else.
@@ -28,8 +28,8 @@ declare module 'fastify' {
   interface FastifySchema { tags?: readonly string[]; summary?: string; description?: string }
   /** Set by the front step: who is calling (null = nobody). */
   interface FastifyRequest { caller: Caller | null }
-  /** `operator: true` — the server key's alone; a user gets access denied. */
-  interface FastifyContextConfig { operator?: boolean }
+  /** `serviceRole: true` — the service role's alone; a user gets access denied. */
+  interface FastifyContextConfig { serviceRole?: boolean }
 }
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
@@ -68,7 +68,7 @@ export function ok<T>(data: T) {
 
 const log = logger('http');
 
-/** The headers the server key names who it acts for with. */
+/** The headers the service role names who it acts for with. */
 export const ACTING_ORGANIZATION_HEADER = 'x-phantom-organization';
 export const ACTING_USER_HEADER = 'x-phantom-user';
 
@@ -96,10 +96,9 @@ function envelopeHandlers(api: FastifyInstance): void {
     if (fastifyError.validation) return reply.code(400).send(err('invalid_args', fastifyError.message ?? 'invalid arguments'));
     if (error instanceof IdentityError) return reply.code(IDENTITY_STATUS[error.code]).send(err(error.code, error.message));
     if (isPolicyRefusal(error)) return reply.code(403).send(ACCESS_DENIED);
-    const message = error instanceof Error ? error.message : String(error);
-    // The detail is the operator's: a user's 500 says nothing of the inside.
-    if (req.caller?.type === 'user') { log.error({ url: req.url, err: errStr(error) }, 'request failed'); return reply.code(500).send(err('internal', 'internal error')); }
-    reply.code(500).send(err('internal', message));
+    // The detail is the log's: a 500 says nothing of the inside, whoever asked.
+    log.error({ url: req.url, caller: req.caller?.type ?? 'nobody', err: errStr(error) }, 'request failed');
+    reply.code(500).send(err('internal', 'internal error'));
   });
   // A user's not-found and forbidden are one answer: access denied.
   api.addHook('onSend', async (req, reply, payload) => {
@@ -112,7 +111,7 @@ function envelopeHandlers(api: FastifyInstance): void {
 export class HttpApi {
   readonly #app: FastifyInstance;
 
-  constructor(private readonly backend: PhantomBackend, private readonly apiKey: string,
+  constructor(private readonly backend: PhantomBackend, private readonly serviceRoleKey: string,
     /** User space's routes, registered under /app with no key check: the app gates them. */
     private readonly routes?: RouteRegistrar) {
     // forceCloseConnections: a shutdown must not wait on the live feeds (held
@@ -131,13 +130,13 @@ export class HttpApi {
     // The docs collect every route registered after this; the page itself is served below.
     await collectDocs(app, backend.version);
 
-    // /db: CloudBeaver, proxied. Basic auth (console_admin + the API key),
-    // not bearer — a browser cannot send bearer by typing a URL.
-    dbUiRoutes(app, backend.settings, this.apiKey);
+    // /db: CloudBeaver, proxied. Basic auth (service_role + the service role
+    // key), not bearer — a browser cannot send bearer by typing a URL.
+    dbUiRoutes(app, backend.settings, this.serviceRoleKey);
 
     await app.register(async (api) => {
       // Any caller: every client SDK checks the version here before its first
-      // call — a signed-in user's and an API key's as much as the phantom admin's.
+      // call — a signed-in user's and a user key's as much as the service role's.
       api.get('/health', { schema: { tags: ['meta'], summary: 'Check the server is up',
         description: 'Answers with the server\'s version and the SDK version it runs. Any valid credential works. Clients call it first, to check they speak the same SDK version as the server.' } },
       async (req) => {
@@ -195,11 +194,11 @@ export class HttpApi {
     }
 
     // The API's docs (/docs): off unless api_docs_enabled, then behind the console's login.
-    await serveDocs(app, backend.settings, this.apiKey);
+    await serveDocs(app, backend.settings, this.serviceRoleKey);
   }
 
   /** Who is calling, and who the work is for: a user acts for themselves in
-   *  their organization; the server key acts for whoever its headers name,
+   *  their organization; the service role acts for whoever its headers name,
    *  or for no one. 'invalid': the headers name an organization that is not
    *  there, or a user who is not its member. */
   async #who(req: FastifyRequest): Promise<{ caller: Caller; acting?: Acting } | null | 'invalid'> {
@@ -230,7 +229,7 @@ export class HttpApi {
         }
         req.caller = who?.caller ?? null;
         if (!who) { if (required) reply.code(401).send(); else done(); return; }
-        if (who.caller.type === 'user' && req.routeOptions.config?.operator) { reply.code(403).send(ACCESS_DENIED); return; }
+        if (who.caller.type === 'user' && req.routeOptions.config?.serviceRole) { reply.code(403).send(ACCESS_DENIED); return; }
         if (who.acting) actAs(who.acting, () => done()); else done();
       }, (error: unknown) => done(error instanceof Error ? error : new Error(String(error))));
     };

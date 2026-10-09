@@ -24,8 +24,8 @@ export function telegramRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     return reply.code(status).send('ok');
   });
 
-  // Linking a chat — the caller's own (a user's, or the server key's for the
-  // operator). The policies keep each user to their own links.
+  // Linking a chat — the caller's own (a user's, or the service role's). The
+  // policies keep each user to their own links.
   const TAG = { tags: ['telegram'] };
   app.post<{ Body: { project?: string } }>('/telegram/links', { schema: { ...TAG, summary: 'Link a Telegram chat',
     description: 'Creates a one-time link that is valid for a short while. Opening it in Telegram links that chat to the caller: a private chat with `url`, or a group with `group_url`. With `project`, the chat is tied to that project.',

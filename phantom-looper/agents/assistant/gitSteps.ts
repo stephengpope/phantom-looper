@@ -25,7 +25,7 @@ const SESSION_HEADER = 'x-phantom-session';
 
 export interface GitToolsConfig {
   baseUrl: string;
-  apiKey: string;
+  serviceRoleKey: string;
   sessionId: string;
   fetch?: typeof fetch;
   /** The lock identity header, when the caller has one (the cli). */
@@ -100,7 +100,7 @@ async function runGitStream<T extends { result: string }>(
   const response = await fetchWith(`${cfg.baseUrl}/git/${route}`, {
     method: 'POST',
     headers: {
-      authorization: `Bearer ${cfg.apiKey}`, 'content-type': 'application/json',
+      authorization: `Bearer ${cfg.serviceRoleKey}`, 'content-type': 'application/json',
       [SESSION_HEADER]: cfg.sessionId,
       ...(cfg.clientId ? { 'x-phantom-client': cfg.clientId } : {}),
     },

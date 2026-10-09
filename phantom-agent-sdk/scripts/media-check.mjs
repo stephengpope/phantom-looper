@@ -10,12 +10,12 @@
 //   media_region us-east-1, media_bucket, media_access_key_id testkey, media_secret_access_key testsecret0123456789
 //
 //   npm run build -w @phantom-agent-sdk/client
-//   node phantom-agent-sdk/scripts/media-check.mjs <api-url> <api-key> [organization id whose own storage is a bucket named media-org]
+//   node phantom-agent-sdk/scripts/media-check.mjs <api-url> <service-role-key> [organization id whose own storage is a bucket named media-org]
 import { BackendClient } from '../packages/client/dist/index.js';
 import zlib from 'node:zlib';
 
 const [url, key, org] = process.argv.slice(2);
-const backend = new BackendClient({ url, credential: { phantomAdminKey: key }, clientId: 'media-check' });
+const backend = new BackendClient({ url, credential: { serviceRoleKey: key }, clientId: 'media-check' });
 const results = [];
 const check = async (name, run) => {
   try { const note = await run(); results.push(`PASS ${name}${note ? ` — ${note}` : ''}`); }

@@ -15,7 +15,7 @@ import { PresetError } from '../../storage/Presets.js';
 const TAG = { tags: ['presets'] };
 
 export function presetRoutes(app: FastifyInstance, ctx: PhantomBackend) {
-  app.get('/presets', { config: { operator: true }, schema: { ...TAG, summary: 'List model presets',
+  app.get('/presets', { config: { serviceRole: true }, schema: { ...TAG, summary: 'List model presets',
     description: 'The saved sets of model settings, by name.' } },
   async () => {
     const rows = await ctx.presets.list();
@@ -26,7 +26,7 @@ export function presetRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   });
 
   app.put<{ Params: { id: string }; Body: { name: string; values?: Record<string, unknown> } }>(
-    '/presets/:id', { config: { operator: true }, schema: { ...TAG, summary: 'Save a model preset',
+    '/presets/:id', { config: { serviceRole: true }, schema: { ...TAG, summary: 'Save a model preset',
       description: 'Creates or replaces a named set of model settings.',
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       body: { type: 'object', properties: {
@@ -45,7 +45,7 @@ export function presetRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     });
 
   app.delete<{ Params: { id: string } }>(
-    '/presets/:id', { config: { operator: true }, schema: { ...TAG, summary: 'Delete a model preset',
+    '/presets/:id', { config: { serviceRole: true }, schema: { ...TAG, summary: 'Delete a model preset',
       description: 'Deletes one saved set of model settings.',
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } } },
     async (req, reply) => {

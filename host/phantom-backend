@@ -32,7 +32,7 @@ load_env() {
   PORT=$(env_get BACKEND_PORT); PORT="${PORT:-8080}"
   ADDRESS=$(env_get BACKEND_ADDRESS)
   TLS=$(env_get BACKEND_TLS); TLS="${TLS:-public}"
-  KEY=$(env_get API_KEY)
+  KEY=$(env_get SERVICE_ROLE_KEY)
   LOCAL="http://127.0.0.1:$PORT"
 }
 
@@ -42,7 +42,7 @@ note() { printf '  %s\n' "$1"; }
 
 # ── check ───────────────────────────────────────────────────────────────────
 # Tests the things the installer prints and you put in your client: the
-# address, the certificate, and the API key. The installer's own wait loop
+# address, the certificate, and the service role key. The installer's own wait loop
 # only probes 127.0.0.1:PORT — the api talking to itself — which proves none
 # of those. With HTTPS on, Let's Encrypt issues AFTER `up -d` returns, so a
 # failed issuance would otherwise reach you as "install complete" followed by
@@ -55,7 +55,7 @@ note() { printf '  %s\n' "$1"; }
 # it, so a direct probe fails on a healthy server). Internal mode passes
 # Caddy's root as --cacert, never -k: skipping verification would pass while
 # Caddy served some other certificate, which is the failure worth catching.
-# The API key goes in over stdin (-K -), so it never appears in `ps`.
+# The key goes in over stdin (-K -), so it never appears in `ps`.
 cmd_check() {
   load_env
   FAILED=0
@@ -107,8 +107,8 @@ cmd_check() {
   # shellcheck disable=SC2086
   if [ -n "$KEY" ] && printf 'header = "authorization: Bearer %s"\n' "$KEY" \
        | curl -fsS --max-time 10 ${CA_ARGS:-} -K - $( [ "$BASE" != "$LOCAL" ] && printf -- '--resolve %s:443:127.0.0.1' "$ADDRESS" ) "$BASE/settings" >/dev/null 2>&1; then
-    ok "API key accepted (GET /settings)"
-  else bad "API key rejected or /settings unreachable"; fi
+    ok "service role key accepted (GET /settings)"
+  else bad "service role key rejected or /settings unreachable"; fi
 
   [ "$FAILED" -eq 0 ] || exit 1
 }
@@ -131,10 +131,10 @@ phantom-backend — manage this phantom-looper server (install dir: $DIR)
 
   phantom-backend status            are the containers up
   phantom-backend logs [service]    follow a service's log (default: api)
-  phantom-backend check             test the address, certificate and API key a client uses
+  phantom-backend check             test the address, certificate and service role key a client uses
   phantom-backend version           the release this server is running
   phantom-backend update vX.Y.Z     upgrade to a release (same path as POST /update)
-  phantom-backend key               print the API key
+  phantom-backend key               print the service role key
   phantom-backend ca                print Caddy's root certificate (BACKEND_TLS=internal)
 EOF
 }

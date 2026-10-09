@@ -20,16 +20,16 @@ await backend.start();                                 // the API listens; onSta
 ```
 
 Boot-and-connect values come from the environment (`DATABASE_URL`,
-`WORKSPACE_ROOT_PATH`, `PORT`, `API_KEY`, `ENCRYPTION_KEY`, `DOCKER_HOST`);
+`WORKSPACE_ROOT_PATH`, `PORT`, `SERVICE_ROLE_KEY`, `ENCRYPTION_KEY`, `DOCKER_HOST`);
 every behavioural knob is a setting, read over the API.
 
 **Database roles.** `DATABASE_URL` is the bootstrap superuser's; boot uses it
 once to make sure `migrator` (owns every schema and table; runs the
-migrations) and `backend` (the process: rows only, no DDL; makes agent
+migrations) and `service_role` (the process: rows only, no DDL; makes agent
 play-space databases) exist with passwords derived from `ENCRYPTION_KEY`,
 then hangs up. Nothing running can alter a table.
 
-**Routes.** `/api/*` the SDK's, the phantom admin's bearer key on every one;
+**Routes.** `/api/*` the SDK's, the service role key on every one;
 `/api/auth/*` sign-in (Better Auth, with `config.identity`); `/app/*` user
 space's (`config.routes`), no key check — the app gates each with
 `backend.identity.require(request)`. `/db` the database console.
@@ -39,7 +39,7 @@ settings; `POST /api/mail/test` proves them). `config.identity` turns sign-in
 on: magic links, invite-only; every user has a personal organization and an
 invitation adds membership in another; a cli carries the session token as a
 bearer, a program an API key. `backend.identity.callerOf(request)` says who
-is calling — the phantom admin or a user in their organization. The phantom admin
+is calling — the service role or a user in their organization. The service role
 bootstraps the first user with `POST /api/identity/users` and
 `POST /api/identity/magic-link`. docs/multi-user.md has the whole of it.
 

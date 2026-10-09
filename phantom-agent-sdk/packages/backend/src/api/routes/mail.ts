@@ -9,7 +9,7 @@ import type { PhantomBackend } from '../../PhantomBackend.js';
 const TAG = { tags: ['mail'] };
 
 export function mailRoutes(app: FastifyInstance, backend: PhantomBackend) {
-  app.post<{ Body: { to: string } }>('/mail/test', { config: { operator: true }, schema: { ...TAG, summary: 'Send a test email',
+  app.post<{ Body: { to: string } }>('/mail/test', { config: { serviceRole: true }, schema: { ...TAG, summary: 'Send a test email',
     description: 'Sends one email to the given address through the server\'s mail settings, to check they work.',
     body: { type: 'object', required: ['to'], additionalProperties: false, properties: { to: { type: 'string', minLength: 3 } } } } },
   async (req, reply) => {

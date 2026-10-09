@@ -75,7 +75,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         // A project-only key has no global meaning — the global list omits it.
         if (where.kind === 'global' && !ctx.settings.isGlobalSettable(key)) continue;
         // A user sees what they could act on: keys settable below global.
-        // The server's own (limits, mail, the console) are the operator's.
+        // The server's own (limits, mail, the console) are the service role's.
         if (req.caller?.type === 'user' && !ctx.settings.overridableAt(key).length) continue;
         if (!entry.secret) { out[key] = { ...entry, secret: false }; continue; }
         // Credentials are keys of the same store — same table, same chain —

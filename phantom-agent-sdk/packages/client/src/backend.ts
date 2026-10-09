@@ -18,9 +18,9 @@ import { SDK_VERSION } from './sdkVersion.js';
 import { Identity, credentialHeaders, type Caller } from './identity.js';
 import { Media } from './media.js';
 
-/** What a client carries: the phantom admin's key (every SDK route), a user's
- *  session token (a sign-in's `set-auth-token`), or a Better Auth API key. */
-export type Credential = { phantomAdminKey: string } | { sessionToken: string } | { apiKey: string };
+/** What a client carries: the service role key (every SDK route), a user's
+ *  session token (a sign-in's `set-auth-token`), or a user role key. */
+export type Credential = { serviceRoleKey: string } | { sessionToken: string } | { userRoleKey: string };
 
 export interface BackendOptions {
   /** The API root, e.g. `http://localhost:4000/api`. */
@@ -35,7 +35,7 @@ export interface BackendOptions {
    *  a bot); unsaid = a person. Sent as x-phantom-actor: the backend
    *  records it as a session's `started_by` and `last_turn_by`. */
   actor?: string;
-  /** With the server key: the organization (and optionally the user, a
+  /** With the service role key: the organization (and optionally the user, a
    *  member of it) every call is for. The backend runs each call as them —
    *  their organization's rows only, their keys first — and records them
    *  as who made what. Sent as x-phantom-organization / x-phantom-user.
@@ -100,7 +100,7 @@ export class BackendClient {
   readonly clientId: string;
   readonly label: string;
   readonly actor: string | undefined;
-  /** With the server key: the organization and user every call is for (BackendOptions.actingFor). */
+  /** With the service role key: the organization and user every call is for (BackendOptions.actingFor). */
   readonly actingFor: BackendOptions['actingFor'];
   /** Who this client acts for, as the backend records it: the actor, or a person. */
   get actorName(): string { return this.actor ?? PERSON; }
@@ -163,7 +163,7 @@ export class BackendClient {
     }
   }
 
-  /** The headers every request carries: the API key, this client's lock
+  /** The headers every request carries: the credential, this client's lock
    *  identity, the session when the call is on behalf of one, and
    *  content-type ONLY with a body (Fastify 400s a bodyless request that
    *  claims application/json). */

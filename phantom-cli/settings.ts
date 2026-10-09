@@ -63,7 +63,7 @@ export function makeSettings(api: Api, configPath = CONFIG_PATH) {
       return scope ? remote : { ...remote, ...localValues(configPath) };
     },
 
-    /** Write several settings. Server keys go in one PATCH; machine-local
+    /** Write several settings. Server settings go in one PATCH; machine-local
      *  keys go to the local file. A scoped write is server-only. */
     async patch(values: Record<string, ConfigValue>, scope?: Scope): Promise<{ updated: string[] }> {
       if (scope) return remotePatch(values, scope);
@@ -86,7 +86,7 @@ export function makeSettings(api: Api, configPath = CONFIG_PATH) {
     },
 
     /** Clear one setting. Same write path as PATCH {key:null}; local keys
-     *  clear locally, server keys clear on the server. */
+     *  clear locally, server settings clear on the server. */
     clear(key: string, scope?: Scope) {
       return this.patch({ [key]: null }, scope);
     },

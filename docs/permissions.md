@@ -9,12 +9,12 @@ row-level policies are the one rule.
 1. Every owned row records its **organization** and the **user** who made it.
 2. A request works out who it is for, once, at the front of the API: a
    user (sign-in token or user API key) in their active organization, or
-   the server key acting for someone (`x-phantom-organization`,
-   `x-phantom-user`), or the server key alone.
+   the service role acting for someone (`x-phantom-organization`,
+   `x-phantom-user`), or the service role alone.
 3. Work for someone runs as Postgres's `authenticated` role with their
    organization and user set. The database only shows and changes that
    organization's rows. Nothing else checks anything.
-4. The server key alone runs as `backend` and sees everything: the CLI, the
+4. The service role alone runs as `service_role` and sees everything: the CLI, the
    looper, cron, git sync.
 5. Settings use the same chain: **fixed → global → organization → user →
    project**. The most specific value wins, and fixed always wins.
@@ -23,8 +23,8 @@ row-level policies are the one rule.
 
 | Credential | Header | Runs as |
 |---|---|---|
-| Server key (`API_KEY`) | `Authorization: Bearer` | `backend`: everything |
-| Server key + `x-phantom-organization` (+ `x-phantom-user`, a member) | as above | that organization and user, under the policies |
+| Service role key (`SERVICE_ROLE_KEY`, `ph_service_role_…`) | `Authorization: Bearer` | `service_role`: everything |
+| Service role key + `x-phantom-organization` (+ `x-phantom-user`, a member) | as above | that organization and user, under the policies |
 | User sign-in token | `Authorization: Bearer` | that user, in the session's active organization |
 | User API key | `x-api-key` | that user, in the organization the key was made for |
 
@@ -43,7 +43,7 @@ client SDK's `BackendOptions.actingFor` sends the two headers.
   drizzle transaction is switched right after its `BEGIN`. No connection is
   held between statements. Outside `actAs`, it is the pool as before. Every
   table owner uses this one handle, unchanged.
-- **`Database.system`**: always `backend`. Two places use it:
+- **`Database.system`**: always `service_role`. Two places use it:
   - **Better Auth**: it manages identity itself. On the acting handle,
     creating a user fails with "permission denied for table user", which
     was proven.
@@ -54,11 +54,11 @@ client SDK's `BackendOptions.actingFor` sends the two headers.
   denied"}` for anything missing, forbidden or refused by a policy. It is
   shaped in `HttpApi` (an onSend hook and the error handler), and is the
   same whether the thing exists or not. A user's 500 says "internal error";
-  the server key gets the detail.
-- **Operator-only routes** (`config: { operator: true }`): presets, the
+  the log gets the detail.
+- **Service-role-only routes** (`config: { serviceRole: true }`): presets, the
   test mail, user bootstrap, the media bucket's CORS, and Telegram notify.
   A user gets access denied. phantom-looper's `/app` routes admit the
-  server key alone.
+  service role alone.
 - **The two server-wide live feeds** (`/sessions/events`,
   `/settings/events`) are in-memory. Each event goes to a user only if a
   read as them can see the row it is about.
@@ -66,7 +66,7 @@ client SDK's `BackendOptions.actingFor` sends the two headers.
 ## Tables (migration 059)
 
 - **Top-level** (projects, media, token_usage): `organization_id`
-  defaults to the caller's, else `'operator'`. The operator's organization
+  defaults to the caller's, else `'service_role'`. The service role's organization
   is a real row, so there are no null owners.
 - **Under a parent** (workspaces, sessions, cards, crons under a project;
   card_revisions under a card; background_tasks under a session): a
@@ -75,7 +75,7 @@ client SDK's `BackendOptions.actingFor` sends the two headers.
   access denied), never re-homed. A composite foreign key (`parent_id,
   organization_id`) makes drift impossible.
 - **`user_id`** on every owned table, defaulting to the caller (null =
-  the operator).
+  the service role).
 - **token_usage** (was `log_tokens`): a trigger stamps the session's
   organization and project. A session the caller cannot see is refused.
 - **One policy shape**, on all ten owned tables:
@@ -94,7 +94,7 @@ client SDK's `BackendOptions.actingFor` sends the two headers.
 |---|---|
 | `migrator` | the SDK's schemas (`phantom_agent_sdk`, `identity`). The SDK's migrations run as it. |
 | `app_migrator` | user space's schemas. The app's migrations run as it. It can read and reference SDK tables (joins, foreign keys, policies that join them) and cannot alter them: "must be owner". |
-| `backend` | the process. Bypasses RLS, may become `authenticated`. |
+| `service_role` | the process (was `backend`; boot renames it). Bypasses RLS, may become `authenticated`. |
 | `authenticated` | a user. Policies decide every row. |
 
 ## Settings
@@ -140,7 +140,7 @@ client SDK's `BackendOptions.actingFor` sends the two headers.
   `user_id` everywhere, plus `sessions.last_turn_user_id` (060).
   `started_by` / `last_turn_by` say only what kind of driver it was (a
   person, or an automation's name). A user's own request is always a
-  person; only the server key names an automation.
+  person; only the service role names an automation.
 - **Deleting a user** follows GitHub's rule. It is refused while their
   personal organization owns projects or files, or while they are the
   only owner of a shared organization. Once they go, their personal
@@ -254,7 +254,7 @@ GB. Docker Desktop's kernel has no XFS quotas at all.
   local data. Fresh install, upgrade, and a second boot.
 - The real backend over HTTP: 50 scenario checks. Covered:
   - isolation, the one refusal, and the BYOK cascade
-  - acting-for, user API keys, and operator-only routes
+  - acting-for, user role keys, and service-role-only routes
   - token usage stamping and the live feed
   - removed members
   - cron ownership and the person-only actor rule
@@ -267,7 +267,7 @@ One bot per server, and any number of linked chats. Each chat is its own
 user's, in their organization, and everything said there runs as them, the
 same way an API call does.
 
-- **The operator's chat** is the `telegram_authorized_user` setting, the
+- **The service role's chat** is the `telegram_authorized_user` setting, the
   one the CLI sets. It sees the whole server, as before.
 - **A user links a chat:**
   1. `POST /api/telegram/links` returns a one-time link valid for ten
@@ -282,22 +282,22 @@ same way an API call does.
   `/projects`). A project's group always points at its project.
 - **Where messages go:** a session's message, alert or `send_message` goes
   to its owner's chat for that project, else to their private chat. The
-  operator's own work goes to the operator's chat.
+  service role's own work goes to the service role's chat.
 - **Server commands** (status, providers, models, presets, update, restart,
-  tokens, cpu) answer "access denied" outside the operator's chat.
+  tokens, cpu) answer "access denied" outside the service role's chat.
 - **Tables:** `telegram_chats` and `telegram_link_codes` (061) carry the
   owner rule. The app's chat state is per chat
   (`phantom_looper.telegram_chat_state`, 003); the old single row moved to
-  the operator's chat.
+  the service role's chat.
 - **Self-hosted Bot API:** `TELEGRAM_API_BASE` points the bot at Telegram's
   own self-hosted Bot API server, or at a stand-in for tests.
 - **Proven** on the real backend with Telegram faked: 23 checks covering
   linking, one-time codes, each chat seeing only its user's work, the
-  operator's chat seeing all, server commands refused, a project group
+  service role's chat seeing all, server commands refused, a project group
   pinned to its project, other group members ignored, messages routed to
   their owner, managing links, and per-chat state. Migrations were checked
   on a copy of the real local data, which moved the state row to the
-  operator's chat with its session and project, and on a fresh install.
+  service role's chat with its session and project, and on a fresh install.
 
 ## Not yet
 

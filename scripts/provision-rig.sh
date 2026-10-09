@@ -67,7 +67,7 @@ docker save "$SESSION_IMAGE:latest" | docker exec -i "$NAME" docker load >/dev/n
 
 cat <<DONE
 
-  rig up. Run the wizard against it (delete server_key from
+  rig up. Run the wizard against it (delete service_role_key from
   ~/.phantom-cli/settings.json first if this machine is already paired):
 
     PHANTOM_CLI_INSTALL_FLAGS='--tls=internal --address=localhost --no-firewall' \\

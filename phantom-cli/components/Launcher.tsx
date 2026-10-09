@@ -25,7 +25,7 @@ export interface ProjectInfo {
 export type { SessionRow as SessionInfo } from '../../phantom-looper/sessionRows.js';
 import type { SessionRow as SessionInfo } from '../../phantom-looper/sessionRows.js';
 
-/** The `work` column: the git facts in the phantom admin's terms, each with its
+/** The `work` column: the git facts in the service role's terms, each with its
  *  severity mark — the colored • the table draws ahead of the words. Red is
  *  work that exists ONLY on the server's disk (a trash or a sweep loses it),
  *  yellow is safe on origin but not yet in base, green is done. One map, so

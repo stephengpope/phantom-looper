@@ -159,7 +159,7 @@ export class PhantomBackend {
   readonly mailer: Mailer;
   /** Tracked files on S3-compatible storage (the media_* settings). */
   readonly media: Media;
-  /** Who a caller is: the phantom admin's key, or a signed-in user (config.identity). */
+  /** Who a caller is: the service role key, or a signed-in user (config.identity). */
   readonly identity: Identity;
   readonly sessionTitler: SessionTitler;
   /** The backend's git: manual ops, auto-push/pull, instant sync, the archive policy. */
@@ -167,8 +167,8 @@ export class PhantomBackend {
   readonly #httpApi: HttpApi;
   /** Where a client in this process reaches the API: plain HTTP on
    *  loopback. The backend's own agents are clients like any other. */
-  get loopback(): { url: string; apiKey: string } {
-    return { url: `http://127.0.0.1:${this.env.port}/api`, apiKey: this.env.apiKey };
+  get loopback(): { url: string; serviceRoleKey: string } {
+    return { url: `http://127.0.0.1:${this.env.port}/api`, serviceRoleKey: this.env.serviceRoleKey };
   }
 
   // ── runtime ──────────────────────────────────────────────────────────
@@ -204,7 +204,7 @@ export class PhantomBackend {
     this.sessionTitler = new SessionTitler(this.sessions, config.writeTitle);
     this.mailer = new Mailer(this.settings);
     this.media = built.media;
-    this.identity = new Identity(this.database, this.mailer, this.settings, this.projects, this.media, config.identity, this.env.publicUrl, this.env.apiKey);
+    this.identity = new Identity(this.database, this.mailer, this.settings, this.projects, this.media, config.identity, this.env.publicUrl, this.env.serviceRoleKey);
     this.telegramChats = new TelegramChats(this.database.drizzle, this.database.system);
     this.telegramBot = new TelegramBot({ settings: this.settings, settingsEvents: this.settingsEvents, botState: this.telegramBotState,
       chats: this.telegramChats, sessions: this.sessions, projects: this.projects,
@@ -215,7 +215,7 @@ export class PhantomBackend {
       sessionEvents: this.sessionEvents, boardEvents: this.boardEvents, settingsEvents: this.settingsEvents,
       sessionNotes: this.sessionNotes, sessionContainers: this.sessionContainers,
     }, config.git ?? {});
-    this.#httpApi = new HttpApi(this, this.env.apiKey, config.routes);
+    this.#httpApi = new HttpApi(this, this.env.serviceRoleKey, config.routes);
   }
 
   /** What GET /health says beyond `ok` and `version`. */

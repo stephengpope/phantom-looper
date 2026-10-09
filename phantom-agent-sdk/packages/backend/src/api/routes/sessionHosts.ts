@@ -7,7 +7,7 @@
 //   DELETE /session-hosts/:id                forget an offline, empty host
 //   POST   /sessions/:id/move                move a session's workspace to another host
 //
-// Who may: the root API key for shared hosts, a user for their own — the row's
+// Who may: the service role for shared hosts, a user for their own — the row's
 // owner, checked on every call in SessionHosts. The feed is the one long
 // call; it is a host's "online".
 import type { FastifyInstance } from 'fastify';

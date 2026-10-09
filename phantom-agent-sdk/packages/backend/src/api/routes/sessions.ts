@@ -69,7 +69,7 @@ export const clientOf = (req: FastifyRequest): string => {
 /** WHAT KIND of driver the client is (x-phantom-actor): an automation's
  *  own name, or a person when unsaid. What a session records as started_by
  *  and last_turn_by; WHICH user is the row's user_id / last_turn_user_id,
- *  stamped from the request. Only the server key names an automation: a
+ *  stamped from the request. Only the service role names an automation: a
  *  user's own request is always a person, whatever its header says. */
 export const actorOf = (req: FastifyRequest): string => {
   if (req.caller?.type === 'user') return PERSON;

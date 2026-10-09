@@ -4,7 +4,7 @@
 // phantom-fs had). /docs and /docs/json.
 //
 // Off unless `api_docs_enabled` is on (read per request: no restart), and
-// then behind the console's login — `console_admin` and the server's API
+// then behind the console's login — `service_role` and the service role
 // key, which a browser asks for. Off, or the wrong login, it looks like
 // nothing is there. The docs hold no data, but they are a map of the whole
 // API, so they are the key holder's.
@@ -22,7 +22,7 @@ export async function collectDocs(app: FastifyInstance, version: string): Promis
   await app.register(swagger, {
     openapi: {
       info: { title: 'phantom-backend API', version,
-        description: 'Every /api route takes the server key (`Authorization: Bearer <API_KEY>`), or a user: their sign-in token, or their API key (`x-api-key`). ' +
+        description: 'Every /api route takes the service role key (`Authorization: Bearer ph_service_role_…`), or a user: their sign-in token, or their API key (`x-api-key: ph_user_role_…`). ' +
           'A user reaches only their own organization\'s data, and anything else answers `403 access denied`. /app routes are the app\'s own.' },
       components: { securitySchemes: { bearer: { type: 'http', scheme: 'bearer' }, apiKey: { type: 'apiKey', in: 'header', name: 'x-api-key' } } },
       security: [{ bearer: [] }, { apiKey: [] }],
@@ -52,12 +52,12 @@ export async function collectDocs(app: FastifyInstance, version: string): Promis
 }
 
 /** The page and the spec, behind the setting and the console's login. */
-export async function serveDocs(app: FastifyInstance, settings: Settings, apiKey: string): Promise<void> {
+export async function serveDocs(app: FastifyInstance, settings: Settings, serviceRoleKey: string): Promise<void> {
   const gate = async (req: FastifyRequest, reply: FastifyReply) => {
     if (await settings.resolve('api_docs_enabled') !== true) return reply.code(404).send();
     const login = parseBasic(req.headers.authorization);
-    if (!login || login.user !== DB_UI_USER || !timingSafeEqualStr(login.pass, apiKey)) {
-      reply.header('www-authenticate', `Basic realm="phantom-backend API docs: user ${DB_UI_USER}, password: this server's API key", charset="UTF-8"`);
+    if (!login || login.user !== DB_UI_USER || !timingSafeEqualStr(login.pass, serviceRoleKey)) {
+      reply.header('www-authenticate', `Basic realm="phantom-backend API docs: user ${DB_UI_USER}, password: the service role key", charset="UTF-8"`);
       return reply.code(401).send();
     }
   };

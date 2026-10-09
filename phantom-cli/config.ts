@@ -8,10 +8,10 @@
 // Every OTHER setting is the server's, and the server is the one place it is
 // declared — default, type, label, description, choices — served on every
 // entry of GET /settings and rendered verbatim by the screens. This file used
-// to carry a copy of the server keys the /settings and /assistant screens show;
+// to carry a copy of the server's setting keys the /settings and /assistant screens show;
 // the copies drifted (a description said one thing here and another there,
-// a provider list here that the server refused). Nothing about a server key
-// lives here now.
+// a provider list here that the server refused). Nothing about a server
+// setting lives here now.
 //
 // One file, CONFIG_DIR/settings.json. CONFIG_DIR is the ONE root every file the
 // cli owns hangs off (settings.json, sessions/, voice/, bin/, ca/, cli.log,
@@ -50,7 +50,7 @@ export const DEFAULTS = {
   // No default: the server is always https behind Caddy, paired by
   // setup-backend or scripts/setup.sh — there is no address to guess.
   server_url: '' as string,
-  server_key: null as string | null,
+  service_role_key: null as string | null,
   auto_update: true as boolean,
   voice_mic_device: null as string | null,
   voice_speaker_device: null as string | null,
@@ -68,7 +68,7 @@ export type ConfigValue = string | number | boolean | null;
 
 export const DESCRIPTIONS: Record<LocalKey, string> = {
   server_url: 'Base URL of the phantom-looper API — always https://, behind the server\'s Caddy.',
-  server_key: 'Bearer token for the phantom-looper API (its API_KEY).',
+  service_role_key: 'The server\'s service role key (SERVICE_ROLE_KEY in its .env, ph_service_role_…) — or your own user role key (ph_user_role_…).',
   auto_update: 'Check for a new phantom-cli release about once a day and install it in the background. It runs on next launch — the version label above the prompt says when one is ready.',
   voice_mic_device: 'Microphone, by device name. Empty = the system default.',
   voice_speaker_device: 'Speaker, by device name. Empty = the system default.',
@@ -92,7 +92,7 @@ export interface ConfigMeta {
 
 export const META: Record<LocalKey, ConfigMeta> = {
   server_url: { type: 'string', label: 'server url', group: 'server', env: ['PHANTOM_BACKEND_URL'] },
-  server_key: { type: 'string', label: 'api key', secret: true, group: 'server', env: ['PHANTOM_BACKEND_KEY', 'API_KEY'] },
+  service_role_key: { type: 'string', label: 'key', secret: true, group: 'server', env: ['PHANTOM_BACKEND_KEY', 'SERVICE_ROLE_KEY'] },
   auto_update: { type: 'boolean', label: 'auto update', group: 'server', env: ['PHANTOM_CLI_AUTO_UPDATE'] },
   voice_mic_device: { type: 'string', label: 'microphone', group: 'voice' },
   voice_speaker_device: { type: 'string', label: 'speaker', group: 'voice' },

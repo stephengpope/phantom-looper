@@ -44,7 +44,7 @@ import type { Drizzle } from '../storage/Database.js';
 import type { Settings } from '../storage/Settings.js';
 import { media, type MediaRow } from '../storage/schema.js';
 import { logger, errStr } from '../lib/log.js';
-import { OPERATOR_ORGANIZATION } from '../lib/scopes.js';
+import { SERVICE_ROLE_ORGANIZATION } from '../lib/scopes.js';
 
 export type { MediaRow };
 
@@ -55,7 +55,7 @@ export class MediaError extends Error {
     | 'not_uploading' | 'storage_changed' | 'storage_failed', message: string) { super(message); this.name = 'MediaError'; }
 }
 
-/** Who a file belongs to. `organizationId` null = the operator's (OPERATOR_ORGANIZATION). */
+/** Who a file belongs to. `organizationId` null = the service role's (SERVICE_ROLE_ORGANIZATION). */
 export interface MediaOwner {
   organizationId: string | null;
   userId?: string | null;
@@ -189,18 +189,18 @@ export class Media {
 
   // ── reading rows ─────────────────────────────────────────────────────
 
-  /** One file. With `organizationId` given (null = the operator's),
+  /** One file. With `organizationId` given (null = the service role's),
    *  another organization's file is not found. */
   async get(id: string, organizationId?: string | null): Promise<MediaRow> {
     const [row] = await this.database.select().from(media).where(eq(media.id, id));
-    if (!row || (organizationId !== undefined && row.organizationId !== (organizationId ?? OPERATOR_ORGANIZATION))) throw new MediaError('not_found', `no media file ${id}`);
+    if (!row || (organizationId !== undefined && row.organizationId !== (organizationId ?? SERVICE_ROLE_ORGANIZATION))) throw new MediaError('not_found', `no media file ${id}`);
     return row;
   }
 
-  /** Ready files, newest first. Each filter given narrows; `organizationId` null = the operator's. */
+  /** Ready files, newest first. Each filter given narrows; `organizationId` null = the service role's. */
   async list(filter: { organizationId?: string | null; projectId?: string; userId?: string; limit?: number } = {}): Promise<MediaRow[]> {
     const where: SQL[] = [eq(media.status, 'ready')];
-    if (filter.organizationId !== undefined) where.push(eq(media.organizationId, filter.organizationId ?? OPERATOR_ORGANIZATION));
+    if (filter.organizationId !== undefined) where.push(eq(media.organizationId, filter.organizationId ?? SERVICE_ROLE_ORGANIZATION));
     if (filter.projectId) where.push(eq(media.projectId, filter.projectId));
     if (filter.userId) where.push(eq(media.userId, filter.userId));
     return this.database.select().from(media).where(and(...where)).orderBy(desc(media.createdAt)).limit(Math.min(filter.limit ?? 100, 1000));
@@ -357,7 +357,7 @@ export class Media {
     const id = newId();
     // The organization's namespace; the file's own id. The user's name for
     // it is in the row, never in the key.
-    const organizationId = owner.organizationId ?? OPERATOR_ORGANIZATION;
+    const organizationId = owner.organizationId ?? SERVICE_ROLE_ORGANIZATION;
     const key = `org/${organizationId}/${id}`;
     const [row] = await this.database.insert(media).values({
       id, organizationId, userId: owner.userId ?? null, projectId: owner.projectId ?? null, sessionId: owner.sessionId ?? null,

@@ -13,16 +13,30 @@ export const IDENTITY_PATH = '/api/auth';
 
 /** Who is calling, as GET /api/identity/me answers it. */
 export type Caller =
-  | { type: 'phantom_admin' }
+  | { type: 'service_role' }
   | { type: 'user'; user: { id: string; email: string; name: string; role: string | null }
       organization: { id: string; name: string; slug: string }; role: 'owner' | 'admin' | 'member' };
 
-/** The headers a credential rides in: the phantom admin's key and a session
- *  token as a bearer, a Better Auth API key as x-api-key. */
+/** Every key says what it is by its prefix: the service role key
+ *  (`SERVICE_ROLE_KEY`, the server's own — it bypasses every fence) and a
+ *  user's API key (made at /api/auth/api-key, theirs alone). A key with
+ *  neither is refused on sight: nothing guesses. */
+export const SERVICE_ROLE_KEY_PREFIX = 'ph_service_role_';
+export const USER_ROLE_KEY_PREFIX = 'ph_user_role_';
+
+/** The credential a key is, by its prefix; null for a key with neither. */
+export function credentialOf(key: string): Credential | null {
+  if (key.startsWith(SERVICE_ROLE_KEY_PREFIX)) return { serviceRoleKey: key };
+  if (key.startsWith(USER_ROLE_KEY_PREFIX)) return { userRoleKey: key };
+  return null;
+}
+
+/** The headers a credential rides in: the service role key and a session
+ *  token as a bearer, a user role key as x-api-key. */
 export function credentialHeaders(credential: Credential): Record<string, string> {
-  if ('phantomAdminKey' in credential) return { authorization: `Bearer ${credential.phantomAdminKey}` };
+  if ('serviceRoleKey' in credential) return { authorization: `Bearer ${credential.serviceRoleKey}` };
   if ('sessionToken' in credential) return { authorization: `Bearer ${credential.sessionToken}` };
-  return { 'x-api-key': credential.apiKey };
+  return { 'x-api-key': credential.userRoleKey };
 }
 
 export interface IdentityDeps {
@@ -69,7 +83,7 @@ export class Identity {
 
   constructor(private readonly deps: IdentityDeps) { this.auth = makeAuthClient(deps); }
 
-  /** Who this client is to the backend: the phantom admin, or a user in their
+  /** Who this client is to the backend: the service role, or a user in their
    *  organization. Throws the backend's `unauthorized` for nobody. */
   me(): Promise<Caller> { return this.deps.me(); }
 

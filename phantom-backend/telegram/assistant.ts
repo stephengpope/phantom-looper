@@ -24,7 +24,7 @@ export interface AssistantDeps {
   cards: Cards;
   projects: Projects;
   /** Where this process reaches its own API (the git streams). */
-  loopback: { url: string; apiKey: string };
+  loopback: { url: string; serviceRoleKey: string };
 }
 
 /** The board handler, at the Cards object — the same rows and refusals the
@@ -95,7 +95,7 @@ export interface AssistantCtx {
  *  No local turns (`busy`) and no held history: the bot holds no session in
  *  memory, so a read is always the record. */
 function telegramHost(deps: AssistantDeps, ctx: AssistantCtx, kit: ToolKitContext): AssistantHost {
-  const gitCfg = (sessionId: string) => ({ baseUrl: deps.loopback.url, apiKey: deps.loopback.apiKey, sessionId });
+  const gitCfg = (sessionId: string) => ({ baseUrl: deps.loopback.url, serviceRoleKey: deps.loopback.serviceRoleKey, sessionId });
   return {
     call: (method, path, body) => kit.backend.call(method, path, body),
     clientId: CLIENT_ID,

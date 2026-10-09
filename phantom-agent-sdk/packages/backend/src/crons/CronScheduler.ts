@@ -86,7 +86,7 @@ export class CronScheduler {
   /** The client a run is made through: the scheduler's lock identity,
    *  acting for the cron's owner. */
   #clientFor(organizationId: string, userId: string | null): BackendClient {
-    return new BackendClient({ url: this.backend.loopback.url, credential: { phantomAdminKey: this.backend.loopback.apiKey },
+    return new BackendClient({ url: this.backend.loopback.url, credential: { serviceRoleKey: this.backend.loopback.serviceRoleKey },
       clientId: CRON_CLIENT_ID, label: 'cron', actor: CRON_STARTER, actingFor: { organizationId, ...(userId ? { userId } : {}) } });
   }
 

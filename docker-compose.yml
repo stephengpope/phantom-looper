@@ -2,7 +2,9 @@
 # (PHANTOM_BACKEND_*) for exactly one upgrade: the release before ran that
 # upgrade with its own updater, which still wrote the old names — the new
 # updater renames them in .env when it starts (updater/watch.sh). Remove the
-# fallbacks once no install can be on a release before v0.1.91.
+# fallbacks once no install can be on a release before v0.1.91. The same for
+# SERVICE_ROLE_KEY, which was API_KEY and carried no prefix: one upgrade, then
+# the fallback goes (no install before v0.1.93).
 #
 # The compose project name — the group every container, network and volume
 # sits under (phantom-backend-api-1, phantom-backend_default, ...), whatever
@@ -60,7 +62,8 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-phantom}:${POSTGRES_PASSWORD:?}@postgres:5432/phantom
       WORKSPACE_ROOT_PATH: /workspaces
       PORT: 8080
-      API_KEY: ${API_KEY:?set in .env}
+      # The service role key: the server's own credential, ph_service_role_ + secret.
+      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-ph_service_role_${API_KEY:-}}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set in .env — openssl rand -base64 32}
       # Set, sign-in is on (people, organizations, invitations, API keys at
       # /api/auth). Empty: off, nothing changes.
@@ -191,7 +194,7 @@ services:
 
   # The database console at /db — CloudBeaver, proxied by the API. No published
   # ports: the only way in is through the API, which checks db_ui_enabled and
-  # the API key. The API stops this container at boot when the setting is off,
+  # the service role key. The API stops this container at boot when the setting is off,
   # and starts/stops it when the setting changes — so it uses zero resources
   # when disabled.
   cloudbeaver:

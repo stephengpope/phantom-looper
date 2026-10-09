@@ -1,5 +1,5 @@
 // Media — the backend's tracked files on S3-compatible storage, over its
-// /media routes (the phantom admin's; an app's own users reach files through
+// /media routes (the service role's; an app's own users reach files through
 // the app's /app routes). Two ways to send a file:
 //   - upload(bytes)  — through the backend, streamed: a server, a script, a cli
 //   - uploadDirect(file) — a browser sending straight to storage on presigned
@@ -27,7 +27,7 @@ export interface MediaFile {
   updatedAt: string;
 }
 
-/** Who a file belongs to; nothing = the phantom admin's. */
+/** Who a file belongs to; nothing = the service role's. */
 export type MediaOwner = { organization?: string; project?: string; user?: string };
 
 export type MediaUploadPlan =
