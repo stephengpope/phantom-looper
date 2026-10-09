@@ -142,7 +142,7 @@ The assistant can also read the server's container logs itself: ask "why did the
 | `phantom-cli setup-backend` | install a new server over SSH and pair this machine |
 | `phantom-cli update` | update this machine and the server to the latest release (`--client` or `--server` for one half) |
 | `phantom-cli --version` | print this machine's and the server's version (`-v` for short) |
-| `phantom-cli host start` | run your sessions on this machine: a session host, in Docker, connected out to your server (`stop`, `status`, `logs`) |
+| `phantom-cli runner start` | run your sessions on this machine: a session runner, in Docker, connected out to your server (`stop`, `status`, `logs`, `update`) |
 
 Environment variables, if you need them:
 

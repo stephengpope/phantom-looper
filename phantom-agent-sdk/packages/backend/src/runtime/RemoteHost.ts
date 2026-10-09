@@ -1,4 +1,4 @@
-// RemoteHost — a session host as the backend sees it: every primitive of
+// RemoteHost — a session runner as the backend sees it: every primitive of
 // WorkspaceHost sent as a job down the host's feed, its answer read off the
 // relay. A proxy; nothing runs here.
 //
@@ -15,6 +15,8 @@ import { newId } from '@phantom-agent-sdk/client';
 import type { ContainerPlan, ContainerState, DetachEvent, FileType, FileStat, Repo, WorkspaceFiles, WorkspaceHost } from './WorkspaceHost.js';
 import { Sandbox, type Exec, type RunOpts, type RunResult, type StreamRecord } from './Sandbox.js';
 import type { GitAuth } from '../git/Git.js';
+import type { PoolProject } from './CheckoutPool.js';
+import type { UpdateEvent } from '@phantom-agent-sdk/client';
 import { type HostLoad, type Job, type JobBody, type JobEvent, decodeError, encodeRunOpts, fromBase64, toBase64 } from '../host/protocol.js';
 import { logger } from '../lib/log.js';
 
@@ -39,6 +41,8 @@ export class RemoteHost implements WorkspaceHost {
   constructor(readonly id: string, public name: string) {}
 
   get online(): boolean { return this.#writer !== null; }
+  /** Jobs sent and not yet answered — what an update's restart would cut. */
+  get inFlight(): number { return this.#pending.size; }
 
   /** The box's load as of its last heartbeat; null before the first one. */
   load: HostLoad | null = null;
@@ -52,8 +56,8 @@ export class RemoteHost implements WorkspaceHost {
     if (this.#boot !== null && this.#boot !== boot) {
       const gone = [...this.#pending.values()];
       this.#pending.clear();
-      log.warn({ host: this.id, jobs: gone.length }, 'session host restarted — its jobs in flight are gone');
-      for (const pending of gone) pending.reject(Object.assign(new Error(`session host ${this.name} restarted — the job did not finish`), { code: 'host_restarted', retryable: true }));
+      log.warn({ host: this.id, jobs: gone.length }, 'session runner restarted — its jobs in flight are gone');
+      for (const pending of gone) pending.reject(Object.assign(new Error(`session runner ${this.name} restarted — the job did not finish`), { code: 'host_restarted', retryable: true }));
     }
     this.#boot = boot;
     this.#writer = writer;
@@ -210,6 +214,14 @@ export class RemoteHost implements WorkspaceHost {
 
   disk(): Promise<{ usedPct: number; freeGB: number }> { return this.#call({ type: 'disk' }); }
   diskSupport(): Promise<string | null> { return this.#call({ type: 'diskSupport' }); }
+  poolTick(projects: PoolProject[]): Promise<void> { return this.#call({ type: 'poolTick', projects }); }
+  removeOldImages(keep: string[]): Promise<void> { return this.#call({ type: 'removeOldImages', keep }); }
+  /** Upgrade the runner to `tag`: its progress as UpdateEvents until it
+   *  restarts (the stream ends, or the new boot fails it `host_restarted`,
+   *  which the caller reads as the same thing) or fails. */
+  update(tag: string, sessionImage: string): AsyncGenerator<UpdateEvent> {
+    return this.#stream<UpdateEvent>({ type: 'update', tag, sessionImage });
+  }
 }
 
 /** Exec over jobs — the Sandbox's rules hold unchanged on top. */

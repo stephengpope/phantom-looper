@@ -48,7 +48,7 @@ import type { Sessions } from '../storage/Sessions.js';
 import type { Workspaces } from '../storage/Workspaces.js';
 import type { Projects } from '../storage/Projects.js';
 import type { Settings } from '../storage/Settings.js';
-import type { SessionHosts } from '../host/SessionHosts.js';
+import type { SessionRunners } from '../host/SessionRunners.js';
 import type { AutoPushResult } from './autoPush.js';
 import type { AutoPullResult } from './autoPull.js';
 import { logger, errStr } from '../lib/log.js';
@@ -61,8 +61,8 @@ export interface InstantSyncDeps {
   workspaces: Workspaces;
   projects: Projects;
   settings: Settings;
-  /** Where each checkout is: its host runs the watcher (host/SessionHosts.ts). */
-  hosts: SessionHosts;
+  /** Where each checkout is: its host runs the watcher (host/SessionRunners.ts). */
+  hosts: SessionRunners;
   /** Auto-push / auto-pull as index.ts wires them for instant sync: no
    *  hold, no fixer, notes to the user message queue. */
   autoPush: (session: SessionRow, project: ProjectRow) => Promise<AutoPushResult>;

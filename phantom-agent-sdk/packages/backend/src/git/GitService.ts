@@ -22,7 +22,7 @@ import type { Workspaces } from '../storage/Workspaces.js';
 import type { Cards } from '../storage/Cards.js';
 import type { Projects } from '../storage/Projects.js';
 import type { Settings } from '../storage/Settings.js';
-import type { SessionHosts } from '../host/SessionHosts.js';
+import type { SessionRunners } from '../host/SessionRunners.js';
 import type { SessionEvents } from '../agents/SessionEvents.js';
 import type { BoardEvents } from '../agents/BoardEvents.js';
 import type { SettingsEvents } from '../agents/SettingsEvents.js';
@@ -58,7 +58,7 @@ export interface GitHooks {
 }
 
 export interface GitServiceDeps {
-  sessions: Sessions; workspaces: Workspaces; cards: Cards; projects: Projects; settings: Settings; hosts: SessionHosts;
+  sessions: Sessions; workspaces: Workspaces; cards: Cards; projects: Projects; settings: Settings; hosts: SessionRunners;
   sessionEvents: SessionEvents; boardEvents: BoardEvents; settingsEvents: SettingsEvents;
   sessionNotes: SessionNotes; sessionContainers: SessionContainers;
 }

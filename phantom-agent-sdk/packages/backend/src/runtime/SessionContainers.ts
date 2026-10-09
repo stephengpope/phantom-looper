@@ -8,8 +8,8 @@
 // This object DECIDES: which image, which limits, which credentials, which
 // database — read from the settings in the project's scope — and hands the
 // whole plan to the host the workspace is placed on (runtime/WorkspaceHost.ts),
-// which creates and starts the container. The backend's own host is this process;
-// a session host is a box of its own. The docker calls live there.
+// which creates and starts the container. The backend's own runner is this process;
+// a session runner is a box of its own. The docker calls live there.
 //
 // No in-memory tracking: idle time comes from the workspace's lastUsedAt
 // (moved by every tool call and turn save on any of its sessions); running-
@@ -21,7 +21,7 @@ import type { Settings } from '../storage/Settings.js';
 import type { AgentDatabases } from '../storage/AgentDatabases.js';
 import * as checkoutPool from './CheckoutPool.js';
 import type { ContainerPlan, ContainerState, WorkspaceHost } from './WorkspaceHost.js';
-import type { SessionHosts } from '../host/SessionHosts.js';
+import type { SessionRunners } from '../host/SessionRunners.js';
 import { containerName } from './LocalHost.js';
 import { logger, errStr } from '../lib/log.js';
 import { scopeOf } from '../lib/scopes.js';
@@ -127,7 +127,7 @@ export interface ContainerOpts {
 
 export class SessionContainers {
   constructor(
-    private hosts: SessionHosts,
+    private hosts: SessionRunners,
     private opts: ContainerOpts = {},
   ) {}
 
@@ -208,14 +208,14 @@ export class SessionContainers {
    *  project's code cannot reach it": the role's password enters the
    *  container's env, and — like the PAT — dies with it. The host joins the
    *  container to the database server's private network by the host name in
-   *  the URL — which only the backend's own host can do: the database server is a
+   *  the URL — which only the backend's own runner can do: the database server is a
    *  container on THIS daemon. A remote host gets no database. */
   private async databaseEnv(project: ProjectRow | undefined, host: WorkspaceHost): Promise<{ env: string[]; host?: string }> {
     if (!project || !this.opts.settings || !this.opts.databases) return { env: [] };
     const on = await this.opts.settings.resolveMany(['agent_database', 'agent_database_shared'], scopeOf(project));
     if (!on.agent_database || !on.agent_database_shared) return { env: [] };
     if (host.id !== null) {
-      log.warn({ project: project.name, host: host.name }, 'agent_database_shared is on but the workspace is on a session host — the container cannot reach the database');
+      log.warn({ project: project.name, host: host.name }, 'agent_database_shared is on but the workspace is on a session runner — the container cannot reach the database');
       return { env: [] };
     }
     const url = await this.opts.databases.urlFor(project.id);
@@ -223,7 +223,7 @@ export class SessionContainers {
     return { env: [`AGENT_DATABASE_URL=${url}`], host: new URL(url).hostname };
   }
 
-  /** Null when the backend's own host can hold a container to `container_disk_gb`. */
+  /** Null when the backend's own runner can hold a container to `container_disk_gb`. */
   diskSupport(): Promise<string | null> { return this.hosts.local.diskSupport(); }
 
   /** Remove the workspace's container on its host. None there is fine — that

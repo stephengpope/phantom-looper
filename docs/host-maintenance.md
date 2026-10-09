@@ -1,11 +1,29 @@
-# Maintenance on session hosts: warm checkouts and disk cleanup
+# Maintenance on session runners: warm checkouts and disk cleanup
 
-A plan. Not built.
+Built: `CheckoutPool.poolFacts` + `tick(facts, paths)`, the `poolTick` and
+`removeOldImages` jobs, `WorkspaceHost.poolTick` / `removeOldImages` on both
+hosts, `pressureSweep` once per box, `SessionRunners.onlineRunners` /
+`projectsOn`. Four things the plan below did not say, found building it:
+
+- **The API's own disk is swept whether or not it runs containers.** Every
+  update pulls an image there. Its box is measured and pruned always; only
+  the owners-and-delete half depends on `runsContainers`.
+- **Offline runners are skipped**, by the sweep as by the tick: nothing can
+  be measured or deleted there, and the tick would only queue.
+- **Each box is measured with a `disk` job**, not the heartbeat's load: the
+  runner is online when it is swept, and the sweep re-measures per deletion.
+- **`removeOldImages { keep }` cannot take a runner's own image**: the
+  pruner skips any image a container uses, so a runner on another tag than
+  the API keeps what it runs.
+
+The runner's tick is not awaited by the maintenance loop (a slow clone there
+would hold the API's own maintenance); the runner drops a tick that lands
+under a running one, as the API does.
 
 ## The problem
 
 Two of the backend's maintenance jobs run only on the API's own machine. A
-session host never gets them:
+session runner never gets them:
 
 1. **Warm checkouts** (`CheckoutPool.tick`): hosts never pre-clone. Every new
    session on a host is a full clone (`LocalHost.checkout` tries `claimSlot`,
@@ -46,7 +64,7 @@ host's tick and the API's never collide.
 host that runs the checkout; what is new is that a host receives tokens for
 projects nobody has opened there yet. **Rule: a host is stocked only for
 projects that have had a workspace on it before** (one query on
-`workspaces.session_host_id`). A fresh host stocks nothing until its first
+`workspaces.session_runner_id`). A fresh host stocks nothing until its first
 session; from then on that project is warm there.
 
 ### 2. Disk cleanup — decisions on the API, deletion on the host

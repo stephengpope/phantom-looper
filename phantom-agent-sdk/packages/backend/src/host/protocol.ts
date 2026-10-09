@@ -1,7 +1,7 @@
-// The job protocol between the backend and a session host — the ONLY
+// The job protocol between the backend and a session runner — the ONLY
 // vocabulary the two speak. Jobs go DOWN the host's feed
-// (GET /session-hosts/:id/jobs, ND-JSON); their events come UP the relay
-// (POST /session-hosts/:id/jobs/events). Every job names a primitive of
+// (GET /session-runners/:id/jobs, ND-JSON); their events come UP the relay
+// (POST /session-runners/:id/jobs/events). Every job names a primitive of
 // runtime/WorkspaceHost.ts and carries everything the host needs to run it.
 //
 // A job ends with exactly one `result` or `error`; a streaming job (exec
@@ -11,6 +11,7 @@
 import type { ContainerPlan } from '../runtime/WorkspaceHost.js';
 import type { GitAuth } from '../git/Git.js';
 import type { RunOpts } from '../runtime/Sandbox.js';
+import type { PoolProject } from '../runtime/CheckoutPool.js';
 
 export type Job = { id: string } & (
   | { type: 'checkout'; workspaceId: string; projectId: string; branch: string; auth: GitAuth }
@@ -37,6 +38,15 @@ export type Job = { id: string } & (
   | { type: 'cancel'; job: string }
   | { type: 'disk' }
   | { type: 'diskSupport' }
+  /** Maintenance, on the API's timer, run where the volume is: the warm
+   *  checkout tick for these projects (docs/host-maintenance.md), and the
+   *  prune of release images older than `keep` that no container uses. */
+  | { type: 'poolTick'; projects: PoolProject[] }
+  | { type: 'removeOldImages'; keep: string[] }
+  /** Upgrade the runner to a release: it pulls the images and hands the tag
+   *  to its updater sidecar, streaming UpdateEvents (client update.ts) as
+   *  chunks until its container is recreated. */
+  | { type: 'update'; tag: string; sessionImage: string }
 );
 
 export type JobType = Job['type'];
@@ -81,6 +91,9 @@ export interface HostFacts {
   /** Null when the box can hold a container to `container_disk_gb`, else why not. */
   diskSupport: string | null;
   sdkVersion: string;
+  /** The release the runner's image is (`vX.Y.Z`), 'dev' for a checkout:
+   *  what an upgrade of the group compares against. */
+  version?: string;
 }
 
 export const toBase64 = (data: Buffer): string => data.toString('base64');

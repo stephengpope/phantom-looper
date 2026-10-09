@@ -15,7 +15,7 @@ import { formatTokenReport, reportWindows } from '../storage/tokenReport.js';
 import type { Clock } from '../lib/clock.js';
 import { startUpdate, subscribe, isRunning } from './updateTask.js';
 import type { UpdateEvent } from '@phantom-agent-sdk/client';
-import { API_IMAGE } from '../lib/env.js';
+import { API_IMAGE, SESSION_IMAGE } from '../lib/env.js';
 import { logger, errStr } from '../lib/log.js';
 
 const log = logger('deployment');
@@ -69,7 +69,7 @@ export class Deployment {
     if (!this.images || !this.docker) throw new DeploymentError('updater_unavailable', 'this server has no docker access');
     if (!isRunning()) {
       startUpdate({ images: this.images, docker: this.docker, triggerDir: this.updateTriggerDir,
-        apiImage: API_IMAGE, sessionImage: 'ghcr.io/stephengpope/phantom-backend-session' }, tag);
+        apiImage: API_IMAGE, sessionImage: SESSION_IMAGE }, tag);
     }
     let unsub: (() => void) | null = null;
     const done = new Promise<void>((resolve) => {

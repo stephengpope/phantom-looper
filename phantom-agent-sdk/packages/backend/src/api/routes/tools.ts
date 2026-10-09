@@ -52,7 +52,7 @@ async function sessionOf(ctx: PhantomBackend, id: string): Promise<{ session: Se
 export function toolRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   const send = (reply: { code: (status: number) => { send: (b: unknown) => unknown } }, error: unknown) => {
     if (error instanceof ToolError) return reply.code(STATUS[error.code] ?? 400).send(err(error.code, error.message, error.retryable, error.detail));
-    // The session host the workspace is on came back as a new process: what
+    // The session runner the workspace is on came back as a new process: what
     // it was running is gone. Retryable — the agent runs the call again.
     if ((error as { code?: unknown }).code === 'host_restarted') return reply.code(503).send(err('host_restarted', (error as Error).message, true));
     throw error;

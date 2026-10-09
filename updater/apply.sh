@@ -28,6 +28,10 @@
 #
 # BACKEND_API_IMAGE / BACKEND_SESSION_IMAGE override the image names for testing
 # (e.g. locally built tags).
+#
+# A SESSION RUNNER upgrades the same way: its compose stack's updater passes
+# HOST_FILES_DIR=/host-files/session-runner, the runner's own files in the
+# image, and BACKEND_DIR is that stack's directory.
 # ============================================================================
 set -eu
 
@@ -36,7 +40,7 @@ BACKEND_DIR="${BACKEND_DIR:-/opt/phantom-looper}"
 API_IMAGE="${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}"
 # Where the image keeps the host files (Dockerfile). Mirrors the install
 # directory's layout, so extraction is a straight copy.
-IMAGE_HOST_DIR=/host-files
+IMAGE_HOST_DIR="${HOST_FILES_DIR:-/host-files}"
 
 # Second line of defense (the api validates too; watch.sh again): the tag lands
 # in an image reference and in .env — nothing but a plain version tag may pass.
@@ -85,7 +89,7 @@ done
 # executable already. Asserted anyway — /usr/local/bin/phantom-backend is a symlink to
 # it, and a file that lands 644 is a command that reports "permission denied"
 # with nothing to say why.
-chmod 755 "$BACKEND_DIR/host/phantom-backend"
+[ -f "$BACKEND_DIR/host/phantom-backend" ] && chmod 755 "$BACKEND_DIR/host/phantom-backend"
 
 # ── 4. Pin the tag in .env + restart ────────────────────────────────────────
 grep -v '^BACKEND_TAG=' "$ENV_FILE" > "$ENV_FILE.tmp" || true
@@ -94,4 +98,4 @@ chmod 600 "$ENV_FILE.tmp"
 mv "$ENV_FILE.tmp" "$ENV_FILE"
 echo "apply: BACKEND_TAG=$TAG pinned"
 docker compose --project-directory "$BACKEND_DIR" -f "$BACKEND_DIR/docker-compose.yml" up -d --remove-orphans
-echo "apply: done — phantom-looper is on $TAG"
+echo "apply: done — $(basename "$BACKEND_DIR") is on $TAG"

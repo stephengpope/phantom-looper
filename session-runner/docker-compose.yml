@@ -1,27 +1,33 @@
-# A SESSION HOST: a box that runs workspaces for a phantom-backend somewhere
-# else. The same image as the API with the host entrypoint, the same named
+# A SESSION RUNNER: a box that runs workspaces for a phantom-backend somewhere
+# else. The same image as the API with the runner entrypoint, the same named
 # volume, the same socket proxy — on a server someone runs, or on a Mac
-# (`phantom host start` writes this file's .env and runs it).
+# (`phantom-cli runner start` writes this file's .env and runs it).
 #
-# The host connects OUT to the backend; nothing listens here. Three values in
+# The runner connects OUT to the backend; nothing listens here. Three values in
 # .env say everything: BACKEND_URL, BACKEND_KEY (the service role key makes a
-# SHARED host any workspace may land on; a user role key makes THEIR host, for
+# SHARED runner any workspace may land on; a user role key makes THEIR runner, for
 # their workspaces alone — the key's prefix says which), and HOST_NAME (a
-# label; defaults to the container's).
-name: phantom-backend-session-host
+# label; defaults to the container's). RUNNER_DIR is this directory's absolute
+# path: the updater's helper mounts it to recreate the stack on an upgrade.
+#
+# UPGRADES come from the backend (POST /session-runners/:id/update, or the
+# group: /session-runners/update) as a job: the runner pulls the images and
+# writes the tag to /trigger, and the `updater` sidecar — the server's own
+# (updater/watch.sh, apply.sh) — recreates the stack on the new tag.
+name: phantom-backend-session-runner
 
 services:
-  session-host:
-    container_name: phantom-backend-session-host
+  session-runner:
+    container_name: phantom-backend-session-runner
     image: ${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}:${BACKEND_TAG:-latest}
     pull_policy: missing
     restart: unless-stopped
     depends_on:
       docker-proxy:
         condition: service_started
-    command: ["node", "dist/phantom-backend/host.js"]
+    command: ["node", "dist/phantom-backend/runner.js"]
     # The image's health probe is the API's (/api/health on 8080); a host
-    # serves no port. Its health is what `phantom-cli host status` asks the backend.
+    # serves no port. Its health is what `phantom-cli runner status` asks the backend.
     healthcheck:
       disable: true
     environment:
@@ -40,9 +46,34 @@ services:
       # The disk-quota helper, with the `disk-quota` profile on (XFS + pquota only).
       DISK_QUOTA_URL: http://disk-quota:7000
       API_IMAGE: ${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}
+      # Where an `update` job drops the release tag for the updater sidecar.
+      UPDATE_TRIGGER_DIR: /trigger
+      # The helper container's name: per stack, so a runner on the same
+      # daemon as a server (a Mac) never reads the server's helper.
+      HELPER_NAME: ${HELPER_NAME:-phantom-update-run-runner}
     volumes:
       - workspaces:/workspaces
+      - updater-trigger:/trigger
     networks: [default, docker]
+
+  # The updater sidecar, as on a server: waits for the runner to write a
+  # release tag into /trigger, then spawns the one-shot helper that copies
+  # this stack's files out of the new image into RUNNER_DIR, pins BACKEND_TAG
+  # in .env and recreates the stack. Holds the docker socket; no network.
+  updater:
+    image: docker:27-cli
+    restart: unless-stopped
+    network_mode: none
+    environment:
+      BACKEND_DIR: ${RUNNER_DIR:?set in .env — this directory's absolute path}
+      HOST_FILES_DIR: /host-files/session-runner
+      HELPER_NAME: ${HELPER_NAME:-phantom-update-run-runner}
+      BACKEND_API_IMAGE: ${BACKEND_API_IMAGE:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./updater:/updater:ro
+      - updater-trigger:/trigger
+    entrypoint: ["sh", "/updater/watch.sh"]
 
   # The socket proxy: the only thing the host process can reach — containers,
   # exec, images, networks; never volumes, swarm or system.
@@ -89,3 +120,4 @@ networks:
 volumes:
   workspaces:
     name: ${WORKSPACE_VOLUME:-phantom-looper-workspaces}
+  updater-trigger:

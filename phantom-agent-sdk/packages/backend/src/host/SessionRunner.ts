@@ -1,4 +1,4 @@
-// SessionHost — the host process: a box with Docker and a workspace volume
+// SessionRunner — the host process: a box with Docker and a workspace volume
 // that connects OUT to a backend and runs its workspaces. The same backend
 // image, this entrypoint instead of the API's; no database, no settings, no
 // secrets of its own — every job carries what it needs, and the host trusts
@@ -26,29 +26,38 @@ import { makePaths, type Paths } from '../lib/paths.js';
 import * as checkoutPool from '../runtime/CheckoutPool.js';
 import { type Job, type JobEvent, type HostHello, type HostLoad, encodeError, fromBase64, toBase64 } from './protocol.js';
 import { SDK_VERSION } from '../sdkVersion.js';
+import { APP_VERSION, API_IMAGE, SESSION_IMAGE } from '../lib/env.js';
+import { startUpdate, subscribe as subscribeUpdate, shutdown as updateShutdown, HELPER_NAME } from '../upgrade/updateTask.js';
+import type { UpdateEvent } from '@phantom-agent-sdk/client';
 import { logger, errStr } from '../lib/log.js';
 
-const log = logger('session-host');
+const log = logger('session-runner');
 
 /** The host's calls to the backend: local or one hop away. */
 const HOST_RETRY: RetryPolicy = { waitsS: [1, 2, 4, 8], budgetMs: 15_000, retryable: (status) => status === 408 || status === 429 || status >= 500 };
 
-export interface SessionHostOptions {
+export interface SessionRunnerOptions {
   /** The backend's origin, e.g. https://phantom.example.com */
   origin: string;
-  /** The service role key (a shared host) or a user role key (their host). */
+  /** The service role key (a shared runner) or a user role key (their host). */
   key: string;
   name: string;
   paths: Paths;
   docker: Docker;
   local: LocalHostOptions;
   certificateAuthority?: Buffer;
+  /** Where an `update` job drops the release tag for the updater sidecar
+   *  (UPDATE_TRIGGER_DIR); absent = no sidecar, updates refuse. */
+  updateTriggerDir?: string;
+  /** The sidecar's helper container name (HELPER_NAME), when the stack sets one. */
+  updateHelperName?: string;
 }
 
-export class SessionHost {
+export class SessionRunner {
   readonly boot = newId();
   #backend: BackendClient;
   readonly #local: LocalHost;
+  readonly #images: Images;
   #link: Link | null = null;
   #id: string | null = null;
   /** Running jobs by id, with the cancel for a stream. A job id seen twice
@@ -60,7 +69,7 @@ export class SessionHost {
   readonly #doneSet = new Set<string>();
   #stopped = false;
 
-  constructor(private readonly opts: SessionHostOptions) {
+  constructor(private readonly opts: SessionRunnerOptions) {
     // One HTTPS/2 socket for everything, as the cli has: the backend's TLS,
     // its own CA when it runs one (BACKEND_CA). There is no other transport.
     const origin = new URL(opts.origin).origin;
@@ -69,15 +78,16 @@ export class SessionHost {
     // The key says which it is by its prefix; a key with neither is refused
     // here, before it is sent anywhere.
     const credential = credentialOf(opts.key);
-    if (!credential) throw new Error(`BACKEND_KEY must be the service role key (${SERVICE_ROLE_KEY_PREFIX}…, a shared host) or your user role key (${USER_ROLE_KEY_PREFIX}…, your host)`);
+    if (!credential) throw new Error(`BACKEND_KEY must be the service role key (${SERVICE_ROLE_KEY_PREFIX}…, a shared runner) or your user role key (${USER_ROLE_KEY_PREFIX}…, your host)`);
     this.#backend = this.#client(credential);
-    this.#local = new LocalHost(opts.docker, new Images(opts.docker), opts.paths, opts.local, { id: null, name: opts.name });
+    this.#images = new Images(opts.docker);
+    this.#local = new LocalHost(opts.docker, this.#images, opts.paths, opts.local, { id: null, name: opts.name });
   }
 
   readonly #connection: BackendConnection;
   #client(credential: Credential): BackendClient {
     return new BackendClient({
-      url: `${new URL(this.opts.origin).origin}/api`, credential, clientId: `session-host-${this.boot}`, label: this.opts.name,
+      url: `${new URL(this.opts.origin).origin}/api`, credential, clientId: `session-runner-${this.boot}`, label: this.opts.name,
       fetch: (input, init) => this.#connection.fetch(input, init), retry: { policy: HOST_RETRY, notice: (text) => log.warn(text) },
     });
   }
@@ -88,13 +98,13 @@ export class SessionHost {
   }
 
   /** From the environment — the compose service's one way in. */
-  static fromEnv(env: NodeJS.ProcessEnv = process.env): SessionHost {
+  static fromEnv(env: NodeJS.ProcessEnv = process.env): SessionRunner {
     const origin = env.BACKEND_URL;
     const key = env.BACKEND_KEY;
     if (!origin) throw new Error('BACKEND_URL is not set — the backend this host connects to');
-    if (!key) throw new Error('BACKEND_KEY is not set — the service role key (a shared host) or your user role key (your host)');
+    if (!key) throw new Error('BACKEND_KEY is not set — the service role key (a shared runner) or your user role key (your host)');
     const root = env.WORKSPACE_ROOT_PATH || '/workspaces';
-    return new SessionHost({
+    return new SessionRunner({
       origin, key,
       name: env.HOST_NAME || os.hostname(),
       paths: makePaths(root),
@@ -108,6 +118,8 @@ export class SessionHost {
       },
       // A PEM through a .env: its newlines may arrive as the two characters `\n`.
       ...(env.BACKEND_CA ? { certificateAuthority: Buffer.from(env.BACKEND_CA.replace(/\\n/g, '\n')) } : {}),
+      ...(env.UPDATE_TRIGGER_DIR ? { updateTriggerDir: env.UPDATE_TRIGGER_DIR } : {}),
+      ...(env.HELPER_NAME ? { updateHelperName: env.HELPER_NAME } : {}),
     });
   }
 
@@ -141,15 +153,16 @@ export class SessionHost {
       arch: os.arch(),
       diskSupport: await this.#local.diskSupport().catch((error) => `probe failed: ${errStr(error)}`),
       sdkVersion: SDK_VERSION,
+      version: APP_VERSION,
     };
     const hello: HostHello = { ...(persisted.id ? { id: persisted.id } : {}), name: this.opts.name, boot: this.boot, facts };
-    const row = await this.#backend.call<{ id: string; name: string }>('POST', '/session-hosts/hello', hello);
+    const row = await this.#backend.call<{ id: string; name: string }>('POST', '/session-runners/hello', hello);
     this.#id = row.id;
     if (persisted.id !== row.id) await fs.writeFile(idFile, JSON.stringify({ id: row.id }) + '\n');
-    log.info({ host: row.id, name: this.opts.name, boot: this.boot, facts }, 'session host registered — opening the feed');
+    log.info({ host: row.id, name: this.opts.name, boot: this.boot, facts }, 'session runner registered — opening the feed');
     this.#link = new Link(this.#backend, {
-      feed: `/session-hosts/${row.id}/jobs?boot=${encodeURIComponent(this.boot)}`,
-      relay: `/session-hosts/${row.id}/jobs/events`,
+      feed: `/session-runners/${row.id}/jobs?boot=${encodeURIComponent(this.boot)}`,
+      relay: `/session-runners/${row.id}/jobs/events`,
       onRecord: (record) => { if (record.event !== 'heartbeat') this.#onJob(record as unknown as Job); },
       reset: () => this.#connection.destroy(),
       onStatus: (up) => log.info({ host: row.id }, up ? 'link up' : 'link down — jobs keep running, events queue'),
@@ -171,10 +184,13 @@ export class SessionHost {
     return { cpu, freeGB: disk.freeGB, usedPct: disk.usedPct, running };
   }
 
-  /** Close the link. What runs keeps running; containers stay up. */
+  /** Close the link. What runs keeps running; containers stay up. An update
+   *  in flight ends its stream first (this restart IS the update), and the
+   *  drain carries that last chunk out before the process goes. */
   async stop(): Promise<void> {
     this.#stopped = true;
     if (this.#heartbeat) clearInterval(this.#heartbeat);
+    updateShutdown();
     await this.#link?.drain().catch(() => {});
     this.#link?.close();
     this.#local.stop();
@@ -222,6 +238,8 @@ export class SessionHost {
       case 'activeWorkspaces': return result(await local.activeWorkspaces());
       case 'disk': return result(await local.disk());
       case 'diskSupport': return result(await local.diskSupport());
+      case 'poolTick': await local.poolTick(job.projects); return result(null);
+      case 'removeOldImages': await local.removeOldImages(job.keep); return result(null);
       case 'exec': {
         const ran = await local.sandbox(job.workspaceId).run(job.argv, {
           cwd: job.cwd, maxBytes: job.maxBytes, timeoutMs: job.timeoutMs,
@@ -231,6 +249,7 @@ export class SessionHost {
       }
       case 'execStream': return this.#pipe(job.id, entry, local.sandbox(job.workspaceId).runStream(job.argv, { cwd: job.cwd, timeoutMs: job.timeoutMs }));
       case 'detach': return this.#pipe(job.id, entry, local.detach(job.workspaceId, job.taskId, job.argv, job.cwd, job.sidfile));
+      case 'update': return this.#pipe(job.id, entry, this.#update(job.tag, job.sessionImage));
       case 'watch': {
         // A standing order: chunks for as long as the watch stands; no end.
         local.watch(job.workspaceId, () => this.#report({ job: job.id, type: 'chunk', value: { changed: true } }));
@@ -239,6 +258,37 @@ export class SessionHost {
       }
       default: throw new Error(`unknown job type ${(job as { type: string }).type}`);
     }
+  }
+
+  /** The upgrade, as the server does its own (upgrade/updateTask.ts): pull
+   *  the images, write the trigger, relay the installer's lines — each an
+   *  UpdateEvent up the relay — until `restarting` (the sidecar recreated
+   *  this container; stop() said so) or `error`. A second update while one
+   *  runs attaches to it. */
+  async *#update(tag: string, sessionImage: string): AsyncGenerator<UpdateEvent> {
+    if (!this.opts.updateTriggerDir) throw new Error('this runner has no updater sidecar (UPDATE_TRIGGER_DIR unset) — bring its compose file up to date: phantom-cli runner start, or copy session-runner/ out of the image again');
+    const queue: UpdateEvent[] = [];
+    let wake: (() => void) | null = null;
+    let over = false;
+    const listener = (event: UpdateEvent) => {
+      if (event.event === 'heartbeat') return;
+      queue.push(event);
+      if (event.event === 'restarting' || event.event === 'error') over = true;
+      wake?.();
+    };
+    startUpdate({ images: this.#images, docker: this.opts.docker, triggerDir: this.opts.updateTriggerDir,
+      apiImage: this.opts.local.apiImage ?? API_IMAGE, sessionImage: sessionImage || SESSION_IMAGE,
+      ...(this.opts.updateHelperName ? { helperName: this.opts.updateHelperName } : { helperName: HELPER_NAME }) }, tag);
+    const unsubscribe = subscribeUpdate(listener);
+    if (!unsubscribe) throw new Error('no update in progress');
+    try {
+      for (;;) {
+        while (queue.length) yield queue.shift()!;
+        if (over) return;
+        await new Promise<void>((resume) => { wake = resume; });
+        wake = null;
+      }
+    } finally { unsubscribe(); }
   }
 
   /** A stream's records up as chunks, then `end`. A cancel ends the

@@ -29,6 +29,9 @@ export const APP_VERSION: string = process.env.APP_VERSION ?? 'dev';
  *  inside; compose hands it in so the disk cleanup can prune its old tags. */
 export const API_IMAGE: string = process.env.API_IMAGE ?? 'ghcr.io/stephengpope/phantom-backend';
 
+/** The session image's name (no tag): what an update pulls beside the api's. */
+export const SESSION_IMAGE: string = process.env.SESSION_IMAGE ?? 'ghcr.io/stephengpope/phantom-backend-session';
+
 /** The secret after the prefix: at least this long. install.sh and setup.sh
  *  write 48 hex characters; a placeholder must not boot a server. */
 const SERVICE_ROLE_SECRET_MIN = 32;

@@ -1,6 +1,6 @@
-# Session hosts
+# Session runners
 
-A session host is a box with Docker and a workspace volume that connects OUT
+A session runner is a box with Docker and a workspace volume that connects OUT
 to the backend and runs workspaces for it. The backend keeps the database and
 makes every decision; a host keeps files and containers and does what it is
 told. Any number of hosts, anywhere: a server someone runs, a developer's
@@ -14,7 +14,7 @@ detached commands, watcher, disk. The backend never opens a workspace path or
 a Docker daemon itself.
 
 - `LocalHost` runs the primitives here, against this process's volume and
-  Docker. It is the backend's own host on every server, and the body of a session
+  Docker. It is the backend's own runner on every server, and the body of a session
   host process.
 - `RemoteHost` sends the same primitives as jobs over a host's link. A proxy;
   nothing runs in the backend.
@@ -25,10 +25,10 @@ backoff, a refill hook on reconnect) and sends that are batched, ordered and
 never dropped. One transport underneath: HTTPS/2 through Caddy, the backend's
 own CA when it runs one. There is no other.
 
-**`SessionHost`** (`host/SessionHost.ts`) — the host process: `LocalHost`
+**`SessionRunner`** (`host/SessionRunner.ts`) — the host process: `LocalHost`
 behind a `Link`. Same image as the backend (`phantom-backend`), the host
-entrypoint (`dist/phantom-backend/host.js`), one compose file
-(`session-host/docker-compose.yml`). No database, no settings, no secrets of
+entrypoint (`dist/phantom-backend/runner.js`), one compose file
+(`session-runner/docker-compose.yml`). No database, no settings, no secrets of
 its own — every job carries what it needs.
 
 ## What a host is
@@ -45,7 +45,7 @@ Identity: the backend assigns an id at the first hello; the host writes it to
 ## Placement
 
 Once, when a workspace is created (`Workspaces.checkout`); pinned from then on
-(`workspaces.session_host_id`, null = the backend itself). In order:
+(`workspaces.session_runner_id`, null = the backend itself). In order:
 
 1. the acting user's own online hosts
 2. shared online hosts
@@ -56,9 +56,9 @@ host whose box cannot hold the project's `container_disk_gb` is skipped.
 
 ## The link
 
-Jobs go DOWN the host's feed (`GET /session-hosts/:id/jobs`, ND-JSON, a
+Jobs go DOWN the host's feed (`GET /session-runners/:id/jobs`, ND-JSON, a
 heartbeat every 15 s); events come UP the relay
-(`POST /session-hosts/:id/jobs/events`). The vocabulary is `host/protocol.ts`:
+(`POST /session-runners/:id/jobs/events`). The vocabulary is `host/protocol.ts`:
 one job per primitive; a streaming job (exec output, a detached command, a
 watch) sends chunks then `end`.
 
@@ -76,7 +76,7 @@ retryable. Background work that must not hang on a closed laptop checks
 
 ## Move
 
-`POST /sessions/:id/move { session_host_id, wait_ms?, force? }`. A move
+`POST /sessions/:id/move { session_runner_id, wait_ms?, force? }`. A move
 happens BETWEEN two tool calls, never under one:
 
 1. The workspace is marked moving: every new tool call for it waits.
@@ -105,13 +105,14 @@ One word per thing, the same in code, routes, docs and what people read:
 
 | word | meaning |
 |---|---|
-| session host | a box that runs workspaces for the backend; `session_hosts`, `SessionHosts`, `/api/session-hosts` |
-| user host | a session host registered with a user's API key; only their workspaces |
-| shared host | a session host registered with the service role key; anyone's workspaces |
+| session runner | a box that runs workspaces for the backend; `session_runners`, `SessionRunners`, `/api/session-runners` |
+| user runner | a session runner registered with a user's API key; only their workspaces |
+| shared runner | a session runner registered with the service role key; anyone's workspaces |
 | service role key | `SERVICE_ROLE_KEY` in `.env` (`ph_service_role_…`); the backend's own credential |
 | user role key | a user's own key (`ph_user_role_…`), made at `/api/auth/api-key`; a key's prefix says which it is |
 | workspace | a checkout and its container; `phantom-backend-session-<id>`, grouped as `phantom-backend-sessions` |
-| job | one instruction from the backend to a host, `{ id, type, ... }` |
+| host | whatever implements `WorkspaceHost`: a session runner, or the backend itself (`LocalHost`) |
+| job | one instruction from the backend to a runner, `{ id, type, ... }` |
 | feed | the long GET a host (or a cli) holds open; records come down it |
 | relay | the POST a host (or a cli) sends records up on |
 | link | one feed plus one relay: the persistent connection (`Link`) |
@@ -125,24 +126,56 @@ Discriminant fields are `type` (as everywhere in the code); feed records use `ev
 |---|---|
 | image | `phantom-backend` (backend and host alike) |
 | server stack | `phantom-backend` → `phantom-backend-api-1`, … |
-| host stack | `phantom-backend-session-host` → `phantom-backend-session-host`, `phantom-backend-session-host-docker-proxy-1` |
+| runner stack | `phantom-backend-session-runner` → `phantom-backend-session-runner`, `phantom-backend-session-runner-docker-proxy-1` |
 | session containers | `phantom-backend-session-<session id>`, grouped as `phantom-backend-sessions` |
 | workspace volume | `phantom-looper-workspaces` |
 
 ## Running one
 
-A server: copy `session-host/` out of the image (it rides at
-`/host-files/session-host/`), fill `.env` (`BACKEND_URL`, `BACKEND_KEY`,
-`HOST_NAME`, `BACKEND_CA` for a backend on its own CA), `docker compose up -d`.
+A server: copy `session-runner/` out of the image (it rides at
+`/host-files/session-runner/`, the updater scripts with it), fill `.env`
+(`BACKEND_URL`, `BACKEND_KEY`, `HOST_NAME`, `RUNNER_DIR` — the directory's
+absolute path — and `BACKEND_CA` for a backend on its own CA), `docker compose
+up -d`.
 
-A Mac: `phantom-cli host start`. It extracts that same compose file from the
+A Mac: `phantom-cli runner start`. It extracts that same stack from the
 release image, writes `.env` from the pairing in `~/.phantom-cli/settings.json`,
-and brings it up under `~/.phantom-cli/host/`. `stop`, `status`, `logs`.
+and brings it up under `~/.phantom-cli/runner/`. `stop`, `status`, `logs`,
+`update`.
+
+## Upgrading
+
+A runner reports its release in its hello (`facts.version`); the list and
+`phantom-cli runner status` show it. Nothing upgrades on its own. The
+mechanism is the server's own, run on the runner's box:
+
+1. `POST /api/session-runners/:id/update { tag }` (or the group:
+   `POST /api/session-runners/update { tag }`, every online runner the caller
+   may use that is not on `tag`) sends the runner an `update` job.
+2. The runner pulls the images and writes the tag into `/trigger`
+   (`upgrade/updateTask.ts`, the same code `POST /update` runs on the API),
+   streaming each `UpdateEvent` up the relay as a chunk; the route streams
+   them down as ND-JSON, the group's each with `runner` and `name`.
+3. The runner stack's `updater` sidecar (`updater/watch.sh`, the server's)
+   spawns the helper that copies `session-runner/` out of the new image into
+   `RUNNER_DIR`, pins `BACKEND_TAG` in `.env` and recreates the stack.
+4. The recreate ends the link: the stream ends with `restarting` (said by
+   the runner as it stops, or read off `host_restarted` when the new boot
+   arrives first). Session containers keep running. Jobs in flight fail
+   `host_restarted`, retryable — refused beforehand unless `restart_anyway`.
+5. The runner comes back on the new release and says hello. The caller
+   waits for `version` on the list: `phantom-cli runner update [vX.Y.Z]` for
+   this machine's, `phantom-cli update` for all of them after the server.
+
+Order: the server first, then the runners, so the backend always speaks the
+newer protocol. `phantom-cli update` does both in that order.
 
 ## Not on a host
 
 Two things stay with the backend's own Docker: the shared agent database
 (`agent_database_shared` needs the database container on the same daemon —
-a workspace on a session host gets none) and the system skills read off the
-workspace image. Disk cleanup measures and sweeps the backend's disk and only
-the workspaces on it; a host's disk is its own.
+a workspace on a session runner gets none) and the system skills read off the
+workspace image. Maintenance reaches every online runner on the API's timer
+(docs/host-maintenance.md): the warm-checkout tick and the disk sweep run
+once per box, each box measured itself, pruning its own images and giving up
+only the workspaces placed on it.

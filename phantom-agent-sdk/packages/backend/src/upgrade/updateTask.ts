@@ -40,6 +40,9 @@ export interface UpdateDeps {
   triggerDir: string;
   apiImage: string;
   sessionImage: string;
+  /** The helper container's name, when the sidecar was told one (HELPER_NAME):
+   *  a runner on the same daemon as a server must not read the server's. */
+  helperName?: string;
 }
 
 // ── the task ────────────────────────────────────────────────────────────────
@@ -131,12 +134,13 @@ async function runUpdate(deps: UpdateDeps, tag: string): Promise<void> {
   // ── 2. hand off to the sidecar ────────────────────────────────────────────
   // The previous run's helper is kept for its logs (watch.sh) — note its id
   // so the new one is told apart from it.
-  const previous = await helperId(deps.docker);
+  const helperName = deps.helperName ?? HELPER_NAME;
+  const previous = await helperId(deps.docker, helperName);
   await fs.writeFile(path.join(deps.triggerDir, 'request'), `${tag}\n`);
   log.info({ tag }, 'update: trigger written');
 
   // ── 3. follow the helper ──────────────────────────────────────────────────
-  const helper = await waitForHelper(deps.docker, previous);
+  const helper = await waitForHelper(deps.docker, previous, helperName);
   if (!helper) {
     emit({ event: 'error', message: 'the updater sidecar did not pick up the request — is the `updater` service running? (phantom-backend status)' });
     return;
@@ -157,16 +161,16 @@ async function runUpdate(deps: UpdateDeps, tag: string): Promise<void> {
   emit({ event: 'error', message: `the installer stopped (exit ${State.ExitCode}): ${lines.slice(-3).join(' · ') || 'no output'}` });
 }
 
-async function helperId(docker: Docker): Promise<string | null> {
-  try { return (await docker.getContainer(HELPER_NAME).inspect()).Id; } catch { return null; }
+async function helperId(docker: Docker, name: string): Promise<string | null> {
+  try { return (await docker.getContainer(name).inspect()).Id; } catch { return null; }
 }
 
 /** The helper container watch.sh spawns for THIS request — a container by
  *  that name whose id differs from the previous run's. */
-async function waitForHelper(docker: Docker, previous: string | null): Promise<Docker.Container | null> {
+async function waitForHelper(docker: Docker, previous: string | null, name: string): Promise<Docker.Container | null> {
   const deadline = Date.now() + HELPER_WAIT_MS;
   while (Date.now() < deadline) {
-    const id = await helperId(docker);
+    const id = await helperId(docker, name);
     if (id && id !== previous) return docker.getContainer(id);
     await new Promise((wake) => setTimeout(wake, 1000));
   }

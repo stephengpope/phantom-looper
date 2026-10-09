@@ -4,10 +4,10 @@
 // the workspace is placed on. Two implementations:
 //
 //   LocalHost   the primitives, run here: this process's volume and Docker.
-//               The backend's own host on every server, and the body of a
-//               session host process (host/SessionHost.ts), which runs the
+//               The backend's own runner on every server, and the body of a
+//               session runner process (host/SessionRunner.ts), which runs the
 //               same code against ITS volume and Docker.
-//   RemoteHost  the same primitives as jobs over a session host's link —
+//   RemoteHost  the same primitives as jobs over a session runner's link —
 //               a proxy; nothing runs in this process.
 //
 // What stays in the backend: every decision. Which image and limits a
@@ -18,6 +18,7 @@
 // Paths: a host primitive takes a workspace id and a path RELATIVE to the
 // workspace's directory (work/<id>): `repo/...`, `scratch/...`, `logs/...`,
 // `web/...`. The host confines every path to that directory; `..` is refused.
+import type { PoolProject } from './CheckoutPool.js';
 import type { GitAuth } from '../git/Git.js';
 import type { Sandbox } from './Sandbox.js';
 
@@ -77,7 +78,7 @@ export type DetachEvent =
   | { event: 'exit'; status: 'exited' | 'killed' | 'orphaned'; exitCode: number | null };
 
 export interface WorkspaceHost {
-  /** The host's row id; null is the backend's own host (this process). */
+  /** The host's row id; null is the backend's own runner (this process). */
   readonly id: string | null;
   readonly name: string;
   /** Online right now. The backend's own always is; a remote host is while
@@ -123,4 +124,9 @@ export interface WorkspaceHost {
   /** Null when this host can hold a container to `container_disk_gb`,
    *  else why not. */
   diskSupport(): Promise<string | null>;
+  /** The warm-checkout tick for these projects, against this box's volume
+   *  (CheckoutPool.tick); a tick under a running one is dropped. */
+  poolTick(projects: PoolProject[]): Promise<void>;
+  /** Remove release images older than each of `keep` that no container uses. */
+  removeOldImages(keep: string[]): Promise<void>;
 }

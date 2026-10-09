@@ -1,8 +1,8 @@
 // LocalHost — the workspace primitives, run HERE: this process's volume and
-// this process's Docker daemon. It is the backend's own host on every server
+// this process's Docker daemon. It is the backend's own runner on every server
 // (the backend holds one and routes to it when a workspace is placed
-// nowhere else), and it is the body of a session host process
-// (host/SessionHost.ts), which runs this same class against its own volume
+// nowhere else), and it is the body of a session runner process
+// (host/SessionRunner.ts), which runs this same class against its own volume
 // and Docker and answers the backend's jobs with it. One implementation of
 // every primitive; where it runs is the only difference.
 //
@@ -19,7 +19,7 @@ import type { Images } from './Images.js';
 import type { Paths } from '../lib/paths.js';
 import { sessionDir, repoDir } from '../lib/paths.js';
 import { git, cloneFresh, localRepo, type GitAuth } from '../git/Git.js';
-import { claimSlot } from './CheckoutPool.js';
+import { claimSlot, tick as poolTick, type PoolProject } from './CheckoutPool.js';
 import { WorkspaceWatcher } from '../git/WorkspaceWatcher.js';
 import { logger, errStr } from '../lib/log.js';
 
@@ -28,8 +28,8 @@ const log = logger('host');
 /** A container is named by the session whose checkout it serves:
  *  `phantom-backend-session-<id>` (the workspace's id IS its owning session's).
  *  The name is the ONE key — it is what up/remove open and what the
- *  running-container list reads the id back off. The session host's own
- *  container shares the prefix (`phantom-backend-session-host`), so the list
+ *  running-container list reads the id back off. The session runner's own
+ *  container shares the prefix (`phantom-backend-session-runner`), so the list
  *  takes only names whose suffix is an id. */
 export const NAME_PREFIX = 'phantom-backend-session-';
 const isId = (suffix: string) => /^[0-9a-z]{26}$/i.test(suffix);
@@ -350,6 +350,9 @@ export class LocalHost implements WorkspaceHost {
    *  data share the host's one disk in any standard install, so this speaks
    *  for both. `bavail` (what an unprivileged user may still use) is the
    *  honest measure of "full". */
+  poolTick(projects: PoolProject[]): Promise<void> { return poolTick(projects, this.paths); }
+  removeOldImages(keep: string[]): Promise<void> { return this.images.removeOlderThan(keep); }
+
   async disk(): Promise<{ usedPct: number; freeGB: number }> {
     const stat = await fs.statfs(this.paths.root);
     if (stat.blocks === 0) return { usedPct: 0, freeGB: Infinity };
