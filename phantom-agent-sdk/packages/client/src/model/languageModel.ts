@@ -88,7 +88,7 @@ function anthropicProvider(spec: ModelSpec, fetchWith: typeof fetch) {
       headers: {
         authorization: `Bearer ${spec.apiKey}`,
         'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
-        'user-agent': 'claude-cli/2.1.75',
+        'user-agent': 'claude-cli/2.1.295',
         'x-app': 'cli',
         'anthropic-dangerous-direct-browser-access': 'true',
       },
