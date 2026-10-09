@@ -17,7 +17,7 @@ import { Sandbox, type Exec, type RunOpts, type RunResult, type StreamRecord } f
 import type { GitAuth } from '../git/Git.js';
 import type { PoolProject } from './CheckoutPool.js';
 import type { UpdateEvent } from '@phantom-agent-sdk/client';
-import { type HostLoad, type Job, type JobBody, type JobEvent, decodeError, encodeRunOpts, fromBase64, toBase64 } from '../host/protocol.js';
+import { type HostLoad, type Job, type JobBody, type JobEvent, type TurnJobResult, decodeError, encodeRunOpts, fromBase64, toBase64 } from '../host/protocol.js';
 import { logger } from '../lib/log.js';
 
 const log = logger('remote-host');
@@ -219,6 +219,12 @@ export class RemoteHost implements WorkspaceHost {
   /** Upgrade the runner to `tag`: its progress as UpdateEvents until it
    *  restarts (the stream ends, or the new boot fails it `host_restarted`,
    *  which the caller reads as the same thing) or fails. */
+  /** Drive a session's turn on this runner (the hand-off's job). Answers
+   *  when the turn ends there; the turn itself is on the session feed. */
+  turn(job: Omit<Extract<JobBody, { type: 'turn' }>, 'type'>): Promise<TurnJobResult> {
+    return this.#call({ type: 'turn', ...job });
+  }
+
   update(tag: string, sessionImage: string): AsyncGenerator<UpdateEvent> {
     return this.#stream<UpdateEvent>({ type: 'update', tag, sessionImage });
   }

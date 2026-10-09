@@ -851,6 +851,22 @@ export class Sessions {
     return expires;
   }
 
+  /** The hand-off: `from`'s hold becomes `to`'s, in one conditional UPDATE
+   *  — only while `from` still holds it, so a hold that lapsed or moved
+   *  meanwhile is not taken from whoever has it now. The label is the new
+   *  holder's (a runner's name); the clock starts again. Returns the new
+   *  expiry, or null when `from` did not hold it. */
+  async transferLock(id: string, from: string, to: string, label: string, ttlMs: number): Promise<Date | null> {
+    const expires = new Date(Date.now() + ttlMs);
+    const rows = await this.database.update(sessions)
+      .set({ lockedBy: to, lockedLabel: label, lockExpiresAt: expires })
+      .where(and(eq(sessions.id, id), eq(sessions.lockedBy, from)))
+      .returning({ id: sessions.id });
+    if (!rows.length) return null;
+    this.changed(id);
+    return expires;
+  }
+
   /** Release `client`'s hold. Idempotent — releasing what you do not hold
    *  changes nothing. Returns whether anything was released. */
   async releaseLock(id: string, client: string): Promise<boolean> {

@@ -11,9 +11,11 @@
 // IN — the stop signal and the row: GET /sessions/:id/events carries
 // {event:"interrupt"} when anyone stops the turn (another client, the
 // interrupt route) — heard here, the turn is aborted exactly as a local
-// interrupt would — and {event:"session", planMode?} when the row moves, so
-// a plan-mode flip lands on the running turn's tools. The feed never echoes
-// a client its own events.
+// interrupt would — {event:"handoff"} when anyone asks this driver to let
+// a session runner finish the turn (the disconnect route) — heard here as
+// the agent's own disconnect — and {event:"session", planMode?} when the
+// row moves, so a plan-mode flip lands on the running turn's tools. The
+// feed never echoes a client its own events.
 import type { BackendClient } from './backend.js';
 import type { StreamPart } from './turn.js';
 
@@ -67,6 +69,8 @@ class Relay {
 
 interface FeedListener {
   onInterrupt(): void;
+  /** Someone asked this driver to hand the turn to a session runner. */
+  onHandoff(): void;
   onPlanMode(on: boolean): void;
   /** The relay or the listener failed — once each; the turn goes on without it. */
   onNotice(text: string): void;
@@ -98,6 +102,7 @@ function watchSession(backend: BackendClient, sessionId: string, listener: FeedL
     try {
       for await (const rec of backend.stream('GET', `/sessions/${sessionId}/events`, undefined, { signal: abort.signal })) {
         if (rec.event === 'interrupt') listener.onInterrupt();
+        else if (rec.event === 'handoff') listener.onHandoff();
         else if (rec.event === 'session' && typeof rec.planMode === 'boolean') listener.onPlanMode(rec.planMode);
       }
     } catch (error) {

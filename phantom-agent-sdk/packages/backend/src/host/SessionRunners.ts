@@ -178,6 +178,25 @@ export class SessionRunners {
       : 'no shared runner runner is online, and this server runs no session containers itself');
   }
 
+  /** Where a handed-off turn goes: an online runner that can drive
+   *  `agentType` (its hello said so), in the workspace tiers — the user's
+   *  own first, then shared — lowest CPU, random among equals. Null when
+   *  none can: the server itself drives no handed-off turns. */
+  async placeTurn(userId: string | null, agentType: string): Promise<RemoteHost | null> {
+    const rows = await this.database.select().from(sessionRunners);
+    const able = rows.filter((row) => this.#remote.get(row.id)?.online && (row.facts.agents ?? []).includes(agentType));
+    const cpuOf = (row: SessionRunnerRow) => this.#remote.get(row.id)!.load?.cpu ?? 0;
+    const least = (tier: SessionRunnerRow[]): SessionRunnerRow | undefined => {
+      if (!tier.length) return undefined;
+      const best = Math.min(...tier.map(cpuOf));
+      const idle = tier.filter((row) => cpuOf(row) === best);
+      return idle[Math.floor(Math.random() * idle.length)];
+    };
+    const chosen = (userId ? least(able.filter((row) => row.ownerUserId === userId)) : undefined)
+      ?? least(able.filter((row) => row.ownerUserId === null));
+    return chosen ? this.#remote.get(chosen.id)! : null;
+  }
+
   private async workspaceCounts(hostIds: string[]): Promise<Map<string, number>> {
     if (!hostIds.length) return new Map();
     // Files present: a purged session's row stays, pinned, and holds nothing.

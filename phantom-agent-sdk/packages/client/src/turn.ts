@@ -25,6 +25,11 @@
 //   interrupted         → the drivers if still unanswered, partial text and
 //                         every tool call seen, results for finished tools,
 //                         INTERRUPTED_RESULT for the rest, an `interrupted` line.
+//   handed off          → nothing: the hand-off lands at a STEP BOUNDARY — the
+//                         model call answered, every tool result in — so the
+//                         record is whole and the next driver calls the model
+//                         next. `handoff()` is a stop condition, not a stop:
+//                         the step in flight always finishes first.
 import { streamText, stepCountIs, hasToolCall, type AssistantContent, type LanguageModel, type ModelMessage, type SystemModelMessage,
   type TextStreamPart, type Tool, type ToolCallPart } from 'ai';
 import { PhantomError, asPhantomError } from './errors.js';
@@ -48,7 +53,9 @@ export interface TurnResult {
   /** Every message this turn added to the conversation, in order. */
   messages: ModelMessage[];
   usage: TokenTotals;
-  outcome: 'done' | 'interrupted';
+  /** `handed_off`: the turn stopped at a step boundary for another driver
+   *  to go on with (TurnInput.handoff); the record is whole, no mark written. */
+  outcome: 'done' | 'interrupted' | 'handed_off';
 }
 
 export interface TurnInput {
@@ -86,6 +93,11 @@ export interface TurnInput {
   /** A run failed before its drivers were written: those words are the
    *  caller's again. Riders are never handed back — they were written. */
   unsent(texts: string[]): void;
+  /** Asked after every step whose tool calls all landed: true ends the turn
+   *  there as `handed_off` — the model is not called again here. A step that
+   *  ended the run on its own (the model stopped, a terminal tool) is done,
+   *  whatever this says. */
+  handoff(): boolean;
 }
 
 /** The step in flight, from its parts: text, tool calls, results. Used for
@@ -140,7 +152,9 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
   const history = [...input.history];
   let carry = input.opening;
   for (;;) {
-    const stopped = await runModelLoop(input, history, carry, tally);
+    const ended = await runModelLoop(input, history, carry, tally);
+    if (ended === 'handed_off') return { text: tally.text, messages: tally.added, usage: tally.usage, outcome: 'handed_off' };
+    const stopped = ended === 'stopped';
     // Stopped: the caller says whether the turn goes on. Done: anything the
     // user sent meanwhile that did not ride a call continues this turn — the
     // reply the user is waiting for is to everything they said.
@@ -149,9 +163,14 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
   }
 }
 
+/** How one model loop ended: the model stopped on its own (or a terminal
+ *  tool ended it), a stop cut it, or the hand-off condition held at a step
+ *  boundary. */
+type LoopEnd = 'done' | 'stopped' | 'handed_off';
+
 /** One model ↔ tools loop over `history + tally.added`, opening with
- *  `carry` (its drivers). Resolves true when it was stopped. */
-async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], carry: string[], tally: Tally): Promise<boolean> {
+ *  `carry` (its drivers). */
+async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], carry: string[], tally: Tally): Promise<LoopEnd> {
   const outer = input.loopSignal();
   const abort = new AbortController();
   const onOuterAbort = () => abort.abort(outer.reason);
@@ -176,8 +195,12 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
     throw error;
   }
 
-  async function streamModelLoop(): Promise<boolean> {
+  async function streamModelLoop(): Promise<LoopEnd> {
     let streamFailure: unknown;
+    /** The hand-off condition, read where the AI SDK reads it: after a step
+     *  whose tool calls all landed. Remembered so the end can tell a stop
+     *  the condition made from one the model made. */
+    let handedOff = false;
     /** Set by the breaker: the stream is cut like a stop, the cut step
      *  recorded, then this is thrown instead of the stop's return. */
     let tripped: PhantomError | undefined;
@@ -212,6 +235,7 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
       stopWhen: [
         ...(input.maxSteps == null ? [] : [stepCountIs(input.maxSteps)]),
         ...(input.terminal.length ? [hasToolCall(...input.terminal)] : []),
+        () => { if (input.handoff()) handedOff = true; return handedOff; },
       ],
       maxRetries: 0,                       // retries are the fetch wrapper's, never stacked
       // The AI SDK's default onError is console.error — a second copy of a
@@ -327,7 +351,7 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
       await settled();
       if (tripped) throw tripped;
       if (step.text) tally.text = step.text;
-      return true;
+      return 'stopped';
     }
 
     if (streamFailure !== undefined) {
@@ -336,7 +360,12 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
         : typeof streamFailure === 'string' ? streamFailure : JSON.stringify(streamFailure);
       throw new PhantomError(isContextTooLong(message) ? 'context_too_long' : 'model_error', message, { cause: streamFailure, retryable: false });
     }
-    return false;
+    // The condition is consulted only after a step with tool calls, so it
+    // holding means the model has more to do and nothing here ended the run
+    // — unless a terminal tool was among that step's calls, which ends the
+    // turn whatever else was asked.
+    if (handedOff && !step.calls.some((call) => input.terminal.includes(call.toolName))) return 'handed_off';
+    return 'done';
   }
 }
 

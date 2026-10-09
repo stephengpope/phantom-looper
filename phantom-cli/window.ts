@@ -1829,6 +1829,19 @@ export class WindowStore {
         } catch (entry) { this.note(`could not rename session ${session.id}: ${(entry as Error).message}`); }
         return;
       }
+      case 'disconnect': {
+        // The turn goes on without this window: at its next step boundary the
+        // hold moves to a session runner, which calls the model next. The
+        // answer comes when that landed — or did not, and the turn stayed.
+        // Either way the pane keeps showing the turn: ours, or the runner's
+        // over the session feed.
+        if (!session) { this.note('no session is open — nothing to hand off'); return; }
+        if (!session.agent.busy) { this.note('no turn is running here — nothing to hand off'); return; }
+        this.note('handing off at the next step…');
+        const answer = await session.agent.disconnect();
+        if (!answer.handedOff) this.note(`not handed off — ${answer.reason}`);
+        return;
+      }
       case 'pin': {
         if (!session) { this.note('no session is open — nothing to pin'); return; }
         const on = !session.pinned;

@@ -47,7 +47,19 @@ export type Job = { id: string } & (
    *  to its updater sidecar, streaming UpdateEvents (client update.ts) as
    *  chunks until its container is recreated. */
   | { type: 'update'; tag: string; sessionImage: string }
+  /** Drive a session's turn from here: the hold is already this runner's
+   *  (the hand-off moved it), the record ends at a step boundary, and
+   *  `opening` is what the last driver had queued — often nothing. The
+   *  runner resumes the agent of `agentType` (one it said it can drive,
+   *  HostFacts.agents) as a client acting for `actingFor`, runs the turn to
+   *  its end over the backend's ordinary routes, and answers how it ended.
+   *  The turn itself streams on the session feed, never on this link. */
+  | { type: 'turn'; sessionId: string; agentType: string; opening: string[]; actor: string;
+      actingFor: { organizationId: string; userId?: string } }
 );
+
+/** How a `turn` job ended — the client SDK's TurnResult without the messages. */
+export interface TurnJobResult { outcome: 'done' | 'interrupted' | 'handed_off'; text: string; usage: { input: number; output: number; cacheRead: number; cacheWrite: number } }
 
 export type JobType = Job['type'];
 /** A job without its id — per type, not the union's common fields. */
@@ -93,6 +105,9 @@ export interface HostFacts {
   /** The release the runner's image is (`vX.Y.Z`), 'dev' for a checkout:
    *  what an upgrade of the group compares against. */
   version?: string;
+  /** The agent types this runner can drive (a `turn` job): the names its
+   *  app registered classes for. Absent or empty: it drives none. */
+  agents?: string[];
 }
 
 export const toBase64 = (data: Buffer): string => data.toString('base64');

@@ -55,6 +55,10 @@ export type SessionEvent =
    *  telegram engine's subscription. Server-side turns get the same signal
    *  in-process through `activeTurns`. */
   | { event: 'interrupt' }
+  /** Someone asked the driver of this session's turn to hand it to a
+   *  session runner (the disconnect route). The driver hears it as its own
+   *  `disconnect()`: the step in flight finishes, then the hold moves. */
+  | { event: 'handoff' }
   /** The transcript was saved: the record moved. `by` is the client that
    *  wrote it. */
   | { event: 'transcript'; updated_at: string; by: string }

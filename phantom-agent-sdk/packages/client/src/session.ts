@@ -63,6 +63,9 @@ export interface TurnStart {
 }
 export interface PublishedTool { name: string; summary: string; description?: string; input: Record<string, unknown>; mutates: boolean }
 
+/** Where a handed-off turn went: the session runner now driving it. */
+export interface HandoffTarget { id: string; name: string }
+
 export class Session implements SessionInfo {
   #row: SessionRow;
   #messages: ModelMessage[];
@@ -106,23 +109,36 @@ export class Session implements SessionInfo {
    *  turn waits for it (`ended`). The server renews the hold on the turn's
    *  own writes. An end that fails is reported, never thrown over the
    *  turn's own outcome. */
-  async turn<T>(type: string, signal: AbortSignal, body: (start: TurnStart & { recordMoved: boolean; endAfter: (work: Promise<unknown>) => void }) => Promise<T>,
-    opts: { rebuildSystemPrompt?: SystemPromptLayout } = {}): Promise<T> {
+  async turn<T>(type: string, signal: AbortSignal, body: (start: TurnStart & { recordMoved: boolean; endAfter: (work: Promise<unknown>) => void; handedOff: () => void }) => Promise<T>,
+    opts: { rebuildSystemPrompt?: SystemPromptLayout; message?: string } = {}): Promise<T> {
     await this.#ending;
     const start = await this.backend.call<TurnStart>('POST', `/sessions/${this.id}/turn-start`,
-      { type, label: this.backend.label, ...(opts.rebuildSystemPrompt ? { system_prompt_layout: opts.rebuildSystemPrompt } : {}) }, { signal });
+      { type, label: this.backend.label, ...(opts.message ? { message: opts.message } : {}),
+        ...(opts.rebuildSystemPrompt ? { system_prompt_layout: opts.rebuildSystemPrompt } : {}) }, { signal });
     // A rebuilt prompt is the row's now; the record line that marks it is
     // among what makeCurrent reads (the stamp moved).
     if (start.system_prompt) this.#row = { ...this.#row, system_prompt: start.system_prompt };
     let before: Promise<unknown> = Promise.resolve();
+    // Handed off: the hold is another driver's now — this turn does not end
+    // it; the new driver's turn-ended will.
+    let handedOff = false;
     try {
       return await body({ ...start, recordMoved: start.transcript_updated_at !== this.record.stamp,
-        endAfter: (work) => { before = work; } });
+        endAfter: (work) => { before = work; }, handedOff: () => { handedOff = true; } });
     } finally {
       this.#ending = before.then(() => undefined, () => undefined)
-        .then(() => this.backend.call('POST', `/sessions/${this.id}/turn-ended`))
+        .then(() => (handedOff ? undefined : this.backend.call('POST', `/sessions/${this.id}/turn-ended`)))
         .then(() => undefined, (error: unknown) => this.handlers.onError(asPhantomError(error, 'internal', 'ending the turn')));
     }
+  }
+
+  /** Under the hold, at a step boundary: hand the turn to a session runner.
+   *  `opening` is what the next driver opens with — the words queued here
+   *  that no model call took. The server moves the hold and sends the job;
+   *  it answers who took it, or refuses (no runner, an agent it cannot
+   *  drive) and this driver goes on itself. */
+  handoff(opening: string[]): Promise<HandoffTarget> {
+    return this.backend.call<{ runner: HandoffTarget }>('POST', `/sessions/${this.id}/handoff`, { opening }).then((answer) => answer.runner);
   }
 
   /** The last turn's end has reached the server (or failed, reported). */

@@ -18,13 +18,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import type Docker from 'dockerode';
-import { BackendClient, BackendConnection, Link, newId, credentialOf, SERVICE_ROLE_KEY_PREFIX, USER_ROLE_KEY_PREFIX, type Credential, type RetryPolicy } from '@phantom-agent-sdk/client';
+import { BackendClient, BackendConnection, Link, newId, credentialOf, SERVICE_ROLE_KEY_PREFIX, USER_ROLE_KEY_PREFIX, type Agent, type AgentHandlers, type Credential, type RetryPolicy } from '@phantom-agent-sdk/client';
 import { LocalHost, type LocalHostOptions } from '../runtime/LocalHost.js';
 import { Images } from '../runtime/Images.js';
 import { makeDocker } from '../runtime/Docker.js';
 import { makePaths, type Paths } from '../lib/paths.js';
 import * as checkoutPool from '../runtime/CheckoutPool.js';
-import { type Job, type JobEvent, type HostHello, type HostLoad, encodeError, fromBase64, toBase64 } from './protocol.js';
+import { type Job, type JobEvent, type HostHello, type HostLoad, type TurnJobResult, encodeError, fromBase64, toBase64 } from './protocol.js';
 import { SDK_VERSION } from '../sdkVersion.js';
 import { APP_VERSION, API_IMAGE, SESSION_IMAGE } from '../lib/env.js';
 import { startUpdate, subscribe as subscribeUpdate, shutdown as updateShutdown } from '../upgrade/updateTask.js';
@@ -36,6 +36,11 @@ const log = logger('session-runner');
 
 /** The host's calls to the backend: local or one hop away. */
 const HOST_RETRY: RetryPolicy = { waitsS: [1, 2, 4, 8], budgetMs: 15_000, retryable: (status) => status === 408 || status === 429 || status >= 500 };
+
+/** The agents a runner can drive, by registered type name: the app's Agent
+ *  subclasses (`CodingAgent.resumeSession`), as the cron takes one. A
+ *  handed-off turn on a session of that type is resumed through these. */
+export type TurnAgents = Record<string, { resumeSession(backend: BackendClient, handlers: AgentHandlers, sessionId: string): Promise<Agent> }>;
 
 export interface SessionRunnerOptions {
   /** The backend's origin, e.g. https://phantom.example.com */
@@ -52,6 +57,8 @@ export interface SessionRunnerOptions {
   updateTriggerDir?: string;
   /** The sidecar's helper container name (HELPER_NAME), when the stack sets one. */
   updateHelperName?: string;
+  /** The agent types this runner drives (`turn` jobs). Absent: none. */
+  agents?: TurnAgents;
 }
 
 export class SessionRunner {
@@ -98,8 +105,9 @@ export class SessionRunner {
     await this.#backend.call('GET', '/identity/me');
   }
 
-  /** From the environment — the compose service's one way in. */
-  static fromEnv(env: NodeJS.ProcessEnv = process.env): SessionRunner {
+  /** From the environment — the compose service's one way in. `agents`: the
+   *  app's classes, by type, for the turns this runner may drive. */
+  static fromEnv(env: NodeJS.ProcessEnv = process.env, extra: { agents?: TurnAgents } = {}): SessionRunner {
     const origin = env.BACKEND_URL;
     const key = env.BACKEND_KEY;
     if (!origin) throw new Error('BACKEND_URL is not set — the backend this host connects to');
@@ -121,6 +129,7 @@ export class SessionRunner {
       ...(env.BACKEND_CA ? { certificateAuthority: Buffer.from(env.BACKEND_CA.replace(/\\n/g, '\n')) } : {}),
       ...(env.UPDATE_TRIGGER_DIR ? { updateTriggerDir: env.UPDATE_TRIGGER_DIR } : {}),
       ...(env.HELPER_NAME ? { updateHelperName: env.HELPER_NAME } : {}),
+      ...(extra.agents ? { agents: extra.agents } : {}),
     });
   }
 
@@ -155,6 +164,7 @@ export class SessionRunner {
       diskSupport: await this.#local.diskSupport().catch((error) => `probe failed: ${errStr(error)}`),
       sdkVersion: SDK_VERSION,
       version: APP_VERSION,
+      agents: Object.keys(this.opts.agents ?? {}),
     };
     const hello: HostHello = { ...(persisted.id ? { id: persisted.id } : {}), name: this.opts.name, boot: this.boot, facts };
     const row = await this.#backend.call<{ id: string; name: string; heartbeatMs?: number }>('POST', '/session-runners/hello', hello);
@@ -253,6 +263,7 @@ export class SessionRunner {
       case 'execStream': return this.#pipe(job.id, entry, local.sandbox(job.workspaceId).runStream(job.argv, { cwd: job.cwd, timeoutMs: job.timeoutMs }));
       case 'detach': return this.#pipe(job.id, entry, local.detach(job.workspaceId, job.taskId, job.argv, job.cwd, job.sidfile));
       case 'update': return this.#pipe(job.id, entry, this.#update(job.tag, job.sessionImage));
+      case 'turn': return result(await this.#turn(job, entry));
       case 'watch': {
         // A standing order: chunks for as long as the watch stands; no end.
         local.watch(job.workspaceId, () => this.#report({ job: job.id, type: 'chunk', value: { changed: true } }));
@@ -260,6 +271,40 @@ export class SessionRunner {
         return;
       }
       default: throw new Error(`unknown job type ${(job as { type: string }).type}`);
+    }
+  }
+
+  /** A handed-off turn, driven here: the agent of the session's type,
+   *  resumed as a client of the backend under THIS runner's id — the hold
+   *  the hand-off moved is already ours, so its turn-start is a renewal —
+   *  acting for whoever the turn is for, run from the step boundary to the
+   *  end with what the last driver had queued. Everything the turn does
+   *  (the model, the tools, the record, the stream) goes over the ordinary
+   *  routes, as it would from a cli; this link carries only the job and its
+   *  answer. A cancel is the turn's interrupt. */
+  async #turn(job: Extract<Job, { type: 'turn' }>, entry: { cancel?: () => void }): Promise<TurnJobResult> {
+    const agents = this.opts.agents?.[job.agentType];
+    if (!agents) throw new Error(`this runner drives no '${job.agentType}' agent — it offers: ${Object.keys(this.opts.agents ?? {}).join(', ') || 'none'}`);
+    if (!this.#id) throw new Error('the runner has no id yet — the hello has not answered');
+    const credential = credentialOf(this.opts.key)!;
+    const client = new BackendClient({
+      url: `${new URL(this.opts.origin).origin}/api`, credential, clientId: this.#id, label: this.opts.name,
+      actor: job.actor, actingFor: job.actingFor,
+      fetch: (input, init) => this.#connection.fetch(input, init), retry: { policy: HOST_RETRY, notice: (text) => log.warn(text) },
+    });
+    const handlers: AgentHandlers = {
+      onError: (error) => log.warn({ session: job.sessionId, code: error.code, err: error.message }, 'turn error'),
+      onNotice: (notice) => log.info({ session: job.sessionId, type: notice.type }, notice.text),
+    };
+    const agent = await agents.resumeSession(client, handlers, job.sessionId);
+    entry.cancel = () => agent.interrupt();
+    try {
+      log.info({ session: job.sessionId, agent: job.agentType, opening: job.opening.length }, 'turn taken over');
+      const result = await agent.continueTurn(job.opening);
+      log.info({ session: job.sessionId, outcome: result.outcome, tokens: result.usage.input + result.usage.output }, 'turn finished here');
+      return { outcome: result.outcome, text: result.text, usage: result.usage };
+    } finally {
+      await agent.close().catch((error) => log.warn({ session: job.sessionId, err: errStr(error) }, 'agent did not close cleanly'));
     }
   }
 
