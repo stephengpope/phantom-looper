@@ -6,14 +6,20 @@ import { SessionRunner, logger, errStr } from '@phantom-agent-sdk/backend';
 import { CodingAgent } from '../phantom-looper/agents/coding.js';
 import { SupervisorAgent } from '../phantom-looper/agents/supervisor.js';
 import { AssistantAgent } from '../phantom-looper/agents/assistant.js';
+import { codingAgentCardKit, supervisorCardKit, type CardRunCard, type LoopColumn } from './looper/cardRunTools.js';
 
 const log = logger('boot');
 
 async function main() {
-  // The turns this box can drive (a hand-off from a cli, or wherever a turn
-  // is placed): this app's three agents, by type. The same classes a cli
-  // window and the API's engines run.
-  const host = SessionRunner.fromEnv(process.env, { agents: { coding: CodingAgent, supervisor: SupervisorAgent, assistant: AssistantAgent } });
+  // The turns this box can drive (a hand-off from a cli, a cron or a card
+  // run placed here): this app's three agents, by type — the classes a cli
+  // window and the API's engines run — and the card run's kits, which a
+  // placed looper turn asks for by name with its card.
+  const host = SessionRunner.fromEnv(process.env, { agents: {
+    coding: { agent: CodingAgent, kits: { 'card-run': (args) => codingAgentCardKit(args.card as CardRunCard) } },
+    supervisor: { agent: SupervisorAgent, kits: { 'card-run': (args) => supervisorCardKit(args.card as CardRunCard, args.column as LoopColumn) } },
+    assistant: { agent: AssistantAgent },
+  } });
   const stop = (signal: string) => {
     log.info({ signal }, 'session runner stopping — the link closes, what runs keeps running');
     host.stop().then(() => process.exit(0), (error) => { log.error({ err: errStr(error) }, 'stop failed'); process.exit(1); });

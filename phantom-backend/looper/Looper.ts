@@ -1,8 +1,9 @@
 // The looper: the supervisor loop over kanban cards. User space, on the
 // backend SDK's objects (cards, sessions, settings, the feeds) and the client
-// SDK's agents over loopback — a card run is two agents, a coder and a
-// supervisor, each a normal client of this backend's own API, holding its
-// session like a cli window would.
+// SDK's agents — a card run is two agents, a coder and a supervisor, each a
+// normal client of this backend's own API, holding its session like a cli
+// window would. Each turn runs on a session runner when one drives the
+// agent (backend.turns.place), else here over loopback.
 //
 // There is NO loop object and NO polling. Loop state = card status plus the
 // two transcripts (logic.ts reads the next owed step off them). Every card
@@ -44,8 +45,11 @@ export class Looper {
   private stopped = false;
   private running = new Set<string>();          // projectId:cardNumber — one live loop per card
   private pending = new Set<string>();          // called while running — go again after
-  /** The agents with a turn in flight, by session id — stop() interrupts them. */
+  /** The agents with a turn in flight HERE, by session id — stop() interrupts them. */
   private agents = new Map<string, Agent>();
+  /** The sessions whose turn runs on a session runner right now — stop()
+   *  sends those the interrupt signal over the feed. */
+  private placed = new Set<string>();
   /** One client, this looper's lock identity, for every agent it opens. */
   /** One client per card owner: the run acts for the card's organization and
    *  the user who made it (059), so every row it touches is fenced as theirs
@@ -106,10 +110,14 @@ export class Looper {
   stop(): void {
     this.stopped = true;
     for (const agent of this.agents.values()) agent.interrupt({ keepQueue: true });
+    for (const sessionId of this.placed) this.backend.sessions.interrupt(sessionId, CLIENT_ID, { foreground: this.backend.foregroundCommands });
   }
   /** Cards with a round in flight right now — what an api restart would
    *  interrupt (they resume after boot). GET /health carries it so callers can warn. */
   runningCount(): number { return this.running.size; }
+  /** Card turns running on session runners right now — what an api restart
+   *  does NOT interrupt (they run on, their results land when it is back). */
+  placedCount(): number { return this.placed.size; }
 
   /** Run the loop on every card in a loop column, for one project (a
    *  supervision setting changed) or all of them (boot). `canTurn` is
@@ -281,9 +289,30 @@ export class Looper {
     const runCard = { projectId: project.id, number: card.number };
     codingAgent.addToolKit(codingAgentCardKit(runCard));
 
-    // A session held elsewhere: `sendMessage` rejects session_locked and
-    // nothing is recorded — the lock's release re-runs the loop.
-    const run = async (agent: Agent, text: string): Promise<TurnOutcome | 'locked'> => {
+    // One seat's turn. On a session runner that drives this agent when one
+    // is online (backend.turns.place): the hold taken for it, the text its
+    // opening, the seat's card kit riding by name. None online: this process
+    // drives it on the agent, as it always has. A session held elsewhere
+    // either way: nothing is recorded — the lock's release re-runs the loop.
+    const coderKit = { name: 'card-run', args: { card: runCard } };
+    const run = async (agent: Agent, text: string, kit: { name: string; args: Record<string, unknown> }): Promise<TurnOutcome | 'locked'> => {
+      const session = await this.backend.sessions.get(agent.session.id);
+      const placed = session ? await this.backend.turns.place(session, project, { agentType: agent.type, opening: [text], actor: LOOPER_STARTER,
+        actingFor: { organizationId: card.organization_id, ...(card.user_id ? { userId: card.user_id } : {}) }, kits: [kit] }) : 'no_runner';
+      if (placed === 'locked') { await agent.close(); return 'locked'; }
+      if (placed !== 'no_runner') {
+        this.placed.add(agent.session.id);
+        try {
+          const result = await placed.result;
+          budget.spent += result.usage.input + result.usage.output;
+          // Handed on from that runner to another: the turn is still running
+          // elsewhere; the lock's release re-runs the loop when it ends.
+          return result.outcome === 'interrupted' ? 'interrupted' : result.outcome === 'handed_off' ? 'skipped' : 'turn';
+        } finally {
+          this.placed.delete(agent.session.id);
+          await agent.close();
+        }
+      }
       this.agents.set(agent.session.id, agent);
       try {
         const result = await agent.sendMessage(text);
@@ -307,7 +336,7 @@ export class Looper {
     const opener = unsentKickoff(card, codingAgent.session.messages);
     if (opener) {
       await this.setPlanMode(codingAgent.session.id, opener.planMode);
-      return skippedIfLocked(await run(codingAgent, opener.text), 'card');
+      return skippedIfLocked(await run(codingAgent, opener.text, coderKit), 'card');
     }
 
     const supervisor = await SupervisorAgent.resumeSession(this.#clientFor(card), this.handlers(card.number, 'supervisor'), supervisorSessionId);
@@ -320,7 +349,7 @@ export class Looper {
       // traffic included — the step rule reads terminal turns off it). ────
       await codingAgent.close();
       supervisor.addToolKit(supervisorCardKit(runCard, card.status as LoopColumn));
-      return skippedIfLocked(await run(supervisor, step.append.join('\n\n')), 'supervisor');
+      return skippedIfLocked(await run(supervisor, step.append.join('\n\n'), { name: 'card-run', args: { card: runCard, column: card.status } }), 'supervisor');
     }
 
     // ── deliver / return: one coding turn with the owed text. A returned
@@ -329,7 +358,7 @@ export class Looper {
     // losing the human's answer. ──────────────────────────────────────────
     await supervisor.close();
     await this.setPlanMode(codingAgent.session.id, card.status === 'plan');
-    const outcome = skippedIfLocked(await run(codingAgent, step.text), 'card');
+    const outcome = skippedIfLocked(await run(codingAgent, step.text, coderKit), 'card');
     if (outcome !== 'turn') return outcome;
     if (step.kind === 'return' && (card.blocked_reason || card.resolution)) {
       await this.patchCard(project, card.number, { blocked_reason: null, resolution: null });

@@ -55,7 +55,11 @@ export type Job = { id: string } & (
    *  its end over the backend's ordinary routes, and answers how it ended.
    *  The turn itself streams on the session feed, never on this link. */
   | { type: 'turn'; sessionId: string; agentType: string; opening: string[]; actor: string;
-      actingFor: { organizationId: string; userId?: string } }
+      actingFor: { organizationId: string; userId?: string };
+      /** App kits the turn needs beside the server's tools, by the name the
+       *  runner's app registered them under, with what each is built from
+       *  (a card run's card and column). Absent: the server's tools alone. */
+      kits?: Array<{ name: string; args: Record<string, unknown> }> }
 );
 
 /** How a `turn` job ended — the client SDK's TurnResult without the messages. */

@@ -18,7 +18,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import type Docker from 'dockerode';
-import { BackendClient, BackendConnection, Link, newId, credentialOf, SERVICE_ROLE_KEY_PREFIX, USER_ROLE_KEY_PREFIX, type Agent, type AgentHandlers, type Credential, type RetryPolicy } from '@phantom-agent-sdk/client';
+import { BackendClient, BackendConnection, Link, newId, credentialOf, SERVICE_ROLE_KEY_PREFIX, USER_ROLE_KEY_PREFIX, type Agent, type AgentHandlers, type Credential, type RetryPolicy, type ToolKit } from '@phantom-agent-sdk/client';
 import { LocalHost, type LocalHostOptions } from '../runtime/LocalHost.js';
 import { Images } from '../runtime/Images.js';
 import { makeDocker } from '../runtime/Docker.js';
@@ -38,9 +38,13 @@ const log = logger('session-runner');
 const HOST_RETRY: RetryPolicy = { waitsS: [1, 2, 4, 8], budgetMs: 15_000, retryable: (status) => status === 408 || status === 429 || status >= 500 };
 
 /** The agents a runner can drive, by registered type name: the app's Agent
- *  subclasses (`CodingAgent.resumeSession`), as the cron takes one. A
- *  handed-off turn on a session of that type is resumed through these. */
-export type TurnAgents = Record<string, { resumeSession(backend: BackendClient, handlers: AgentHandlers, sessionId: string): Promise<Agent> }>;
+ *  subclass (`CodingAgent`, as the cron takes one) and, by name, the kits a
+ *  turn of that type may ask for beside the server's tools (a card run's
+ *  board powers), each built from the arguments the job carries. */
+export type TurnAgents = Record<string, {
+  agent: { resumeSession(backend: BackendClient, handlers: AgentHandlers, sessionId: string): Promise<Agent> };
+  kits?: Record<string, (args: Record<string, unknown>) => ToolKit>;
+}>;
 
 export interface SessionRunnerOptions {
   /** The backend's origin, e.g. https://phantom.example.com */
@@ -283,8 +287,13 @@ export class SessionRunner {
    *  routes, as it would from a cli; this link carries only the job and its
    *  answer. A cancel is the turn's interrupt. */
   async #turn(job: Extract<Job, { type: 'turn' }>, entry: { cancel?: () => void }): Promise<TurnJobResult> {
-    const agents = this.opts.agents?.[job.agentType];
-    if (!agents) throw new Error(`this runner drives no '${job.agentType}' agent — it offers: ${Object.keys(this.opts.agents ?? {}).join(', ') || 'none'}`);
+    const driven = this.opts.agents?.[job.agentType];
+    if (!driven) throw new Error(`this runner drives no '${job.agentType}' agent — it offers: ${Object.keys(this.opts.agents ?? {}).join(', ') || 'none'}`);
+    const kits = (job.kits ?? []).map((kit) => {
+      const build = driven.kits?.[kit.name];
+      if (!build) throw new Error(`this runner has no '${kit.name}' kit for a '${job.agentType}' agent — it offers: ${Object.keys(driven.kits ?? {}).join(', ') || 'none'}`);
+      return build(kit.args);
+    });
     if (!this.#id) throw new Error('the runner has no id yet — the hello has not answered');
     const credential = credentialOf(this.opts.key)!;
     const client = new BackendClient({
@@ -296,7 +305,8 @@ export class SessionRunner {
       onError: (error) => log.warn({ session: job.sessionId, code: error.code, err: error.message }, 'turn error'),
       onNotice: (notice) => log.info({ session: job.sessionId, type: notice.type }, notice.text),
     };
-    const agent = await agents.resumeSession(client, handlers, job.sessionId);
+    const agent = await driven.agent.resumeSession(client, handlers, job.sessionId);
+    for (const kit of kits) agent.addToolKit(kit);
     entry.cancel = () => agent.interrupt();
     try {
       log.info({ session: job.sessionId, agent: job.agentType, opening: job.opening.length }, 'turn taken over');
