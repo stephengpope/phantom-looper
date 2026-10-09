@@ -64,26 +64,55 @@ export async function claimSlot(
   return false;
 }
 
-// One tick at a time. A second tick starting under a running one works from a
-// stale count and double-stocks.
+/** What a tick needs to know about one project — resolved on the API
+ *  (the database, the settings, the credential) and handed to whichever box
+ *  holds the volume: the API's own, or a session runner as a `poolTick` job. */
+export interface PoolProject {
+  id: string;
+  owner: string;
+  name: string;
+  baseBranch: string;
+  auth: GitAuth;
+  /** spare_clones, spare_clone_refresh_ms, spare_clone_max_age_ms, per project. */
+  target: number;
+  refreshMs: number;
+  maxAgeMs: number;
+}
+
+/** The facts for every project, or null when the list cannot be read.
+ *  Stocking fails OPEN: an unreadable project list must not empty the pool —
+ *  but with no list we cannot tell "project removed" from "db down", so
+ *  nothing is deleted either. The caller skips the tick. */
+export async function poolFacts(projects: Projects, settings: Settings): Promise<PoolProject[] | null> {
+  let rows: ProjectRow[];
+  try { rows = await projects.list(); } catch (error) {
+    log.warn({ err: errStr(error) }, 'skipping pool tick — could not read projects');
+    return null;
+  }
+  return Promise.all(rows.map(async (project) => {
+    const cfg = await settings.resolveMany(
+      ['spare_clones', 'spare_clone_refresh_ms', 'spare_clone_max_age_ms'],
+      scopeOf(project)) as { spare_clones: number; spare_clone_refresh_ms: number; spare_clone_max_age_ms: number };
+    return {
+      id: project.id, owner: project.owner, name: project.name, baseBranch: project.baseBranch,
+      auth: await resolveAuth(settings, project),
+      target: Number(cfg.spare_clones), refreshMs: Number(cfg.spare_clone_refresh_ms), maxAgeMs: Number(cfg.spare_clone_max_age_ms),
+    };
+  }));
+}
+
+// One tick at a time per process. A second tick starting under a running one
+// works from a stale count and double-stocks; it is dropped.
 let ticking = false;
 
-/** Reconcile the pool to what it should be. Everything that is not claiming
- *  happens here; claiming has no side effects, so a session can never be
- *  slowed by maintenance work. */
-export async function tick(projects: Projects, settings: Settings, paths: Paths): Promise<void> {
+/** Reconcile this box's pool to what it should be. Everything that is not
+ *  claiming happens here; claiming has no side effects, so a session can
+ *  never be slowed by maintenance work. Reads no database: `projectRows`
+ *  are the facts (poolFacts), the same on the API and on a runner. */
+export async function tick(projectRows: PoolProject[], paths: Paths): Promise<void> {
   if (ticking) return;
   ticking = true;
   try {
-    // Stocking fails OPEN: an unreadable project list must not empty the pool —
-    // but with no list we cannot distinguish "project removed" from "db down",
-    // so we also must not delete anything. Just stop.
-    let projectRows: ProjectRow[];
-    try { projectRows = await projects.list(); } catch (error) {
-      log.warn({ err: errStr(error) }, 'skipping pool tick — could not read projects');
-      return;
-    }
-
     const now = Date.now();
     // Abandoned clones: being in setup/ at all means unfinished; age is the only question.
     for (const slot of await listDir(paths.poolSetup)) {
@@ -103,11 +132,7 @@ export async function tick(projects: Projects, settings: Settings, paths: Paths)
     // Per-project maintenance, concurrently across projects — one at a time globally
     // would take projects × target ticks to fill from cold.
     await Promise.all([...wanted.entries()].map(async ([prefix, project]) => {
-      const cfg = await settings.resolveMany(
-        ['spare_clones', 'spare_clone_refresh_ms', 'spare_clone_max_age_ms'],
-        scopeOf(project)) as { spare_clones: number; spare_clone_refresh_ms: number; spare_clone_max_age_ms: number };
-      const { spare_clones: target, spare_clone_refresh_ms: refreshMs, spare_clone_max_age_ms: maxAgeMs } = cfg;
-      const auth = await resolveAuth(settings, project);
+      const { target, refreshMs, maxAgeMs, auth } = project;
 
       let mine = ready.filter((slot) => slot.startsWith(prefix));
 

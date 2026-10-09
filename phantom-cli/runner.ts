@@ -126,7 +126,9 @@ export async function runRunner(args: string[]): Promise<number> {
     if (!/^v\d+\.\d+\.\d+$/.test(tag)) { console.error(`not a release tag: ${tag} (vX.Y.Z)`); return 1; }
     const name = envValue('HOST_NAME') ?? hostname();
     const server = { url, call: apiFor(url, key, savedCaFor(url)), stream: streamFor(url, key, savedCaFor(url)) };
-    const mine = (await listRunners(server)).find((runner) => runner.name === name);
+    // A stale row may share the name (a runner started afresh on a new
+    // volume): the online one is this machine's.
+    const mine = (await listRunners(server)).filter((runner) => runner.name === name).sort((a, b) => Number(b.online) - Number(a.online))[0];
     if (!mine) { console.error(`the backend knows no runner named "${name}" — is it up? phantom-cli runner status`); return 1; }
     if (!mine.online) { console.error(`"${name}" is offline — the backend cannot reach it; phantom-cli runner logs`); return 1; }
     if (mine.version === tag) { console.log(`"${name}" is on ${bare(tag)} already.`); return 0; }

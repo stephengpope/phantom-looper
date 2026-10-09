@@ -126,6 +126,14 @@ export class SessionRunners {
   }
 
   byId(id: string | null): WorkspaceHost | undefined { return id === null ? this.local : this.#remote.get(id); }
+  /** The runners whose link is up right now: the ones maintenance reaches. */
+  onlineRunners(): RemoteHost[] { return [...this.#remote.values()].filter((host) => host.online); }
+  /** The projects that have had a workspace on this runner: the only ones it
+   *  is stocked for (a credential goes nowhere it has not already been). */
+  async projectsOn(hostId: string): Promise<Set<string>> {
+    const rows = await this.database.selectDistinct({ projectId: workspaces.projectId }).from(workspaces).where(eq(workspaces.sessionRunnerId, hostId));
+    return new Set(rows.map((row) => row.projectId));
+  }
 
   // ── placement ─────────────────────────────────────────────────────────
 

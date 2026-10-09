@@ -175,5 +175,7 @@ newer protocol. `phantom-cli update` does both in that order.
 Two things stay with the backend's own Docker: the shared agent database
 (`agent_database_shared` needs the database container on the same daemon —
 a workspace on a session runner gets none) and the system skills read off the
-workspace image. Disk cleanup measures and sweeps the backend's disk and only
-the workspaces on it; a host's disk is its own.
+workspace image. Maintenance reaches every online runner on the API's timer
+(docs/host-maintenance.md): the warm-checkout tick and the disk sweep run
+once per box, each box measured itself, pruning its own images and giving up
+only the workspaces placed on it.

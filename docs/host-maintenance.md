@@ -1,6 +1,24 @@
 # Maintenance on session runners: warm checkouts and disk cleanup
 
-A plan. Not built.
+Built: `CheckoutPool.poolFacts` + `tick(facts, paths)`, the `poolTick` and
+`removeOldImages` jobs, `WorkspaceHost.poolTick` / `removeOldImages` on both
+hosts, `pressureSweep` once per box, `SessionRunners.onlineRunners` /
+`projectsOn`. Four things the plan below did not say, found building it:
+
+- **The API's own disk is swept whether or not it runs containers.** Every
+  update pulls an image there. Its box is measured and pruned always; only
+  the owners-and-delete half depends on `runsContainers`.
+- **Offline runners are skipped**, by the sweep as by the tick: nothing can
+  be measured or deleted there, and the tick would only queue.
+- **Each box is measured with a `disk` job**, not the heartbeat's load: the
+  runner is online when it is swept, and the sweep re-measures per deletion.
+- **`removeOldImages { keep }` cannot take a runner's own image**: the
+  pruner skips any image a container uses, so a runner on another tag than
+  the API keeps what it runs.
+
+The runner's tick is not awaited by the maintenance loop (a slow clone there
+would hold the API's own maintenance); the runner drops a tick that lands
+under a running one, as the API does.
 
 ## The problem
 

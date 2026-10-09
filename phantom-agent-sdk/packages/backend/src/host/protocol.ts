@@ -11,6 +11,7 @@
 import type { ContainerPlan } from '../runtime/WorkspaceHost.js';
 import type { GitAuth } from '../git/Git.js';
 import type { RunOpts } from '../runtime/Sandbox.js';
+import type { PoolProject } from '../runtime/CheckoutPool.js';
 
 export type Job = { id: string } & (
   | { type: 'checkout'; workspaceId: string; projectId: string; branch: string; auth: GitAuth }
@@ -37,6 +38,11 @@ export type Job = { id: string } & (
   | { type: 'cancel'; job: string }
   | { type: 'disk' }
   | { type: 'diskSupport' }
+  /** Maintenance, on the API's timer, run where the volume is: the warm
+   *  checkout tick for these projects (docs/host-maintenance.md), and the
+   *  prune of release images older than `keep` that no container uses. */
+  | { type: 'poolTick'; projects: PoolProject[] }
+  | { type: 'removeOldImages'; keep: string[] }
   /** Upgrade the runner to a release: it pulls the images and hands the tag
    *  to its updater sidecar, streaming UpdateEvents (client update.ts) as
    *  chunks until its container is recreated. */

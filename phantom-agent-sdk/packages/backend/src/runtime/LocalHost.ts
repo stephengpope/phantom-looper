@@ -19,7 +19,7 @@ import type { Images } from './Images.js';
 import type { Paths } from '../lib/paths.js';
 import { sessionDir, repoDir } from '../lib/paths.js';
 import { git, cloneFresh, localRepo, type GitAuth } from '../git/Git.js';
-import { claimSlot } from './CheckoutPool.js';
+import { claimSlot, tick as poolTick, type PoolProject } from './CheckoutPool.js';
 import { WorkspaceWatcher } from '../git/WorkspaceWatcher.js';
 import { logger, errStr } from '../lib/log.js';
 
@@ -350,6 +350,9 @@ export class LocalHost implements WorkspaceHost {
    *  data share the host's one disk in any standard install, so this speaks
    *  for both. `bavail` (what an unprivileged user may still use) is the
    *  honest measure of "full". */
+  poolTick(projects: PoolProject[]): Promise<void> { return poolTick(projects, this.paths); }
+  removeOldImages(keep: string[]): Promise<void> { return this.images.removeOlderThan(keep); }
+
   async disk(): Promise<{ usedPct: number; freeGB: number }> {
     const stat = await fs.statfs(this.paths.root);
     if (stat.blocks === 0) return { usedPct: 0, freeGB: Infinity };

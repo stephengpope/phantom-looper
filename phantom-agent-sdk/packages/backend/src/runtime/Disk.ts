@@ -38,7 +38,7 @@ import type { Projects } from '../storage/Projects.js';
 import type { Sessions } from '../storage/Sessions.js';
 import type { SessionRunners } from '../host/SessionRunners.js';
 import type { SessionContainers } from './SessionContainers.js';
-import type { Images } from './Images.js';
+import type { WorkspaceHost } from './WorkspaceHost.js';
 import type { GitSync } from '../git/GitSync.js';
 import { workState, type PushResult } from '../git/Git.js';
 import { logger, errStr } from '../lib/log.js';
@@ -122,6 +122,8 @@ const API_IMAGE_CURRENT = (() => {
 /** Everything disk cleanup does to the world, handed in — so the loop below
  *  is the whole of the logic, and a test runs it against fakes. */
 export interface CleanupDeps {
+  /** The box, for the log lines. */
+  box?: string;
   /** disk_cleanup_percent, read per run. */
   pct: number;
   /** container_idle_ms, read per run: a session used inside it is never deleted. */
@@ -151,7 +153,8 @@ export interface CleanupDeps {
 export async function diskCleanup(deps: CleanupDeps): Promise<void> {
   const start = await deps.measure();
   if (!tooFull(start, deps.pct)) return;
-  log.warn({ ...rounded(start), limitPct: deps.pct, minFreeGB: MIN_FREE_GB }, 'disk too full — cleanup started');
+  const box = deps.box ?? 'this server';
+  log.warn({ box, ...rounded(start), limitPct: deps.pct, minFreeGB: MIN_FREE_GB }, 'disk too full — cleanup started');
 
   let owners: Array<{ session: SessionRow; project: ProjectRow }>;
   let busy: Set<string>;
@@ -159,7 +162,7 @@ export async function diskCleanup(deps: CleanupDeps): Promise<void> {
     owners = await deps.owners();
     busy = await deps.busy(owners.map(({ session }) => session.id));
   } catch (error) {
-    log.warn({ err: errStr(error) }, 'disk cleanup stopped — could not read sessions');
+    log.warn({ box, err: errStr(error) }, 'disk cleanup stopped — could not read sessions');
     return;
   }
   owners.sort((a, b) => a.session.lastUsedAt.getTime() - b.session.lastUsedAt.getTime());
@@ -208,45 +211,58 @@ export async function diskCleanup(deps: CleanupDeps): Promise<void> {
 
   const end = await deps.measure();
   if (tooFull(end, deps.pct)) {
-    log.warn({ ...rounded(end), inUse: left.inUse, unmerged: left.unmerged, busy: left.busy, failed: left.failed },
+    log.warn({ box, ...rounded(end), inUse: left.inUse, unmerged: left.unmerged, busy: left.busy, failed: left.failed },
       'disk still too full — what is left is in use, unmerged, busy or could not be backed up');
   } else {
-    log.info(rounded(end), 'disk cleanup done — disk healthy');
+    log.info({ box, ...rounded(end) }, 'disk cleanup done — disk healthy');
   }
 }
 
-/** Disk cleanup against the real system — THIS server's disk, and only the
- *  workspaces on it: a session runner's disk is its own, and deleting a
- *  workspace there would free nothing here. */
+/** Disk cleanup against the real system, one box at a time: this server's
+ *  disk, then every online session runner's (docs/host-maintenance.md). A
+ *  disk is freed only by what is on it: each box is measured itself, prunes
+ *  its own old images, and gives up only the workspaces placed on it. The
+ *  decisions — which sessions, idle, busy, landed, backed up — are the
+ *  API's; the deletion and the measuring route to the box through its host.
+ *  This server's box is measured and pruned whether or not it runs
+ *  containers: every update pulls an image here. */
 export async function pressureSweep(
-  settings: Settings, projects: Projects, sessions: Sessions, hosts: SessionRunners, images: Images,
+  settings: Settings, projects: Projects, sessions: Sessions, hosts: SessionRunners,
   sessionContainers: SessionContainers, gitSync: GitSync, busy: (workspaceIds: string[]) => Promise<Set<string>>,
 ): Promise<void> {
-  if (!hosts.runsContainers) return;
   const currents = [String(await settings.resolve('container_image')), API_IMAGE_CURRENT];
-  const here = async (session: SessionRow) => (await hosts.hostIdOf(session.id)) === null;
-  await diskCleanup({
-    pct: Number(await settings.resolve('disk_cleanup_percent')),
-    idleMs: Number(await settings.resolve('container_idle_ms')),
-    now: () => Date.now(),
-    fresh: async (session) => (await sessions.get(session.id)) ?? session,
-    measure: () => hosts.local.disk(),
-    owners: async () => {
-      const all = await workspaceOwners(projects, sessions);
-      const flags = await Promise.all(all.map(({ session }) => here(session)));
-      return all.filter((_, i) => flags[i]);
-    },
-    busy,
-    // Measured live from the checkout: the stored `work` column is cleared
-    // once the container is gone, which is exactly the idle session here.
-    landed: async (session, project) => !!session.branch && (await workState(hosts.local.repo(session.id), session.branch, project.baseBranch)) === 'merged',
-    // Images owns the rule and refuses while a pull is in flight (images.ts).
-    removeOldImages: () => images.removeOlderThan(currents)
-      .catch((error) => log.warn({ err: errStr(error) }, 'image cleanup failed')),
-    backup: (session, project, whenSafe) => gitSync.backup(session, project, whenSafe),
-    deleteSession: async (session) => {
-      await sessionContainers.remove(session.id);
-      await sessions.destroy(session, { force: false });
-    },
-  });
+  const pct = Number(await settings.resolve('disk_cleanup_percent'));
+  const idleMs = Number(await settings.resolve('container_idle_ms'));
+  const boxes: Array<{ host: WorkspaceHost; hostId: string | null; holdsWorkspaces: boolean }> = [
+    { host: hosts.local, hostId: null, holdsWorkspaces: hosts.runsContainers },
+    ...hosts.onlineRunners().map((host) => ({ host, hostId: host.id, holdsWorkspaces: true })),
+  ];
+  for (const box of boxes) {
+    const onBox = async (session: SessionRow) => (await hosts.hostIdOf(session.id)) === box.hostId;
+    await diskCleanup({
+      box: box.host.name,
+      pct, idleMs,
+      now: () => Date.now(),
+      fresh: async (session) => (await sessions.get(session.id)) ?? session,
+      measure: () => box.host.disk(),
+      owners: async () => {
+        if (!box.holdsWorkspaces) return [];
+        const all = await workspaceOwners(projects, sessions);
+        const flags = await Promise.all(all.map(({ session }) => onBox(session)));
+        return all.filter((_, i) => flags[i]);
+      },
+      busy,
+      // Measured live from the checkout: the stored `work` column is cleared
+      // once the container is gone, which is exactly the idle session here.
+      landed: async (session, project) => !!session.branch && (await workState(box.host.repo(session.id), session.branch, project.baseBranch)) === 'merged',
+      // Images owns the rule and refuses while a pull is in flight (images.ts).
+      removeOldImages: () => box.host.removeOldImages(currents)
+        .catch((error) => log.warn({ box: box.host.name, err: errStr(error) }, 'image cleanup failed')),
+      backup: (session, project, whenSafe) => gitSync.backup(session, project, whenSafe),
+      deleteSession: async (session) => {
+        await sessionContainers.remove(session.id);
+        await sessions.destroy(session, { force: false });
+      },
+    }).catch((error) => log.warn({ box: box.host.name, err: errStr(error) }, 'disk cleanup failed on this box'));
+  }
 }

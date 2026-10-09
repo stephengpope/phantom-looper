@@ -238,6 +238,8 @@ export class SessionRunner {
       case 'activeWorkspaces': return result(await local.activeWorkspaces());
       case 'disk': return result(await local.disk());
       case 'diskSupport': return result(await local.diskSupport());
+      case 'poolTick': await local.poolTick(job.projects); return result(null);
+      case 'removeOldImages': await local.removeOldImages(job.keep); return result(null);
       case 'exec': {
         const ran = await local.sandbox(job.workspaceId).run(job.argv, {
           cwd: job.cwd, maxBytes: job.maxBytes, timeoutMs: job.timeoutMs,

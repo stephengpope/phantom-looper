@@ -15,6 +15,7 @@ import { newId } from '@phantom-agent-sdk/client';
 import type { ContainerPlan, ContainerState, DetachEvent, FileType, FileStat, Repo, WorkspaceFiles, WorkspaceHost } from './WorkspaceHost.js';
 import { Sandbox, type Exec, type RunOpts, type RunResult, type StreamRecord } from './Sandbox.js';
 import type { GitAuth } from '../git/Git.js';
+import type { PoolProject } from './CheckoutPool.js';
 import type { UpdateEvent } from '@phantom-agent-sdk/client';
 import { type HostLoad, type Job, type JobBody, type JobEvent, decodeError, encodeRunOpts, fromBase64, toBase64 } from '../host/protocol.js';
 import { logger } from '../lib/log.js';
@@ -213,6 +214,8 @@ export class RemoteHost implements WorkspaceHost {
 
   disk(): Promise<{ usedPct: number; freeGB: number }> { return this.#call({ type: 'disk' }); }
   diskSupport(): Promise<string | null> { return this.#call({ type: 'diskSupport' }); }
+  poolTick(projects: PoolProject[]): Promise<void> { return this.#call({ type: 'poolTick', projects }); }
+  removeOldImages(keep: string[]): Promise<void> { return this.#call({ type: 'removeOldImages', keep }); }
   /** Upgrade the runner to `tag`: its progress as UpdateEvents until it
    *  restarts (the stream ends, or the new boot fails it `host_restarted`,
    *  which the caller reads as the same thing) or fails. */

@@ -342,12 +342,25 @@ export class PhantomBackend {
    *  work-state refresh. */
   #startLoops(): void {
     this.#loops.push(this.#loop(async () => {
-      if (this.sessionRunners.runsContainers) await checkoutPool.tick(this.projects, this.settings, this.paths).catch((error) => log.error({ err: errStr(error) }, 'pool tick threw'));
+      // The warm checkouts: the facts resolved once here, the tick run on
+      // every box that holds a volume — this server's (awaited) and each
+      // online runner's (a job; a slow clone there never holds this loop,
+      // and the runner drops a tick under a running one). A runner is
+      // stocked only for projects that have had a workspace on it.
+      const pool = await checkoutPool.poolFacts(this.projects, this.settings);
+      if (pool) {
+        if (this.sessionRunners.runsContainers) await checkoutPool.tick(pool, this.paths).catch((error) => log.error({ err: errStr(error) }, 'pool tick threw'));
+        for (const runner of this.sessionRunners.onlineRunners()) {
+          const served = await this.sessionRunners.projectsOn(runner.id).catch(() => new Set<string>());
+          const mine = pool.filter((project) => served.has(project.id));
+          if (mine.length) void runner.poolTick(mine).catch((error) => log.warn({ runner: runner.name, err: errStr(error) }, 'pool tick on runner failed'));
+        }
+      }
       await idleBackupSweep(this.projects, this.sessions, this.git.sync).catch((error) => log.error({ err: errStr(error) }, 'idle backup sweep threw'));
       const idleMs = await this.settings.resolve<number>('container_idle_ms').catch(() => 30 * 60_000);
       await this.sessionContainers.reap(Number(idleMs), (idleMs) => this.idleContainerWorkspaces(idleMs)).catch((error) => log.error({ err: errStr(error) }, 'container reap threw'));
       await this.media.sweep().catch((error) => log.error({ err: errStr(error) }, 'media sweep threw'));
-      await pressureSweep(this.settings, this.projects, this.sessions, this.sessionRunners, this.images, this.sessionContainers, this.git.sync, (ids) => this.busyWorkspaces(ids))
+      await pressureSweep(this.settings, this.projects, this.sessions, this.sessionRunners, this.sessionContainers, this.git.sync, (ids) => this.busyWorkspaces(ids))
         .catch((error) => log.error({ err: errStr(error) }, 'pressure sweep threw'));
       return Number(await this.settings.resolve<number>('maintenance_interval_ms').catch(() => 60_000));
     }));
