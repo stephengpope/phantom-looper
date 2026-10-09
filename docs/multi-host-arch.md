@@ -109,7 +109,7 @@ One word per thing, the same in code, routes, docs and what people read:
 | user host | a session host registered with a user's API key; only their workspaces |
 | shared host | a session host registered with the root API key; anyone's workspaces |
 | root API key | `API_KEY` in `.env`; the backend's own credential |
-| workspace | a checkout and its container; `phantom-backend-workspace-<id>` |
+| workspace | a checkout and its container; `phantom-backend-session-<id>`, grouped as `phantom-backend-sessions` |
 | job | one instruction from the backend to a host, `{ id, type, ... }` |
 | feed | the long GET a host (or a cli) holds open; records come down it |
 | relay | the POST a host (or a cli) sends records up on |
@@ -125,7 +125,7 @@ Discriminant fields are `type` (as everywhere in the code); feed records use `ev
 | image | `phantom-backend` (backend and host alike) |
 | server stack | `phantom-backend` → `phantom-backend-api-1`, … |
 | host stack | `phantom-backend-session-host` → `phantom-backend-session-host`, `phantom-backend-session-host-docker-proxy-1` |
-| workspace containers | `phantom-backend-workspace-<workspace id>` |
+| session containers | `phantom-backend-session-<session id>`, grouped as `phantom-backend-sessions` |
 | workspace volume | `phantom-looper-workspaces` |
 
 ## Running one

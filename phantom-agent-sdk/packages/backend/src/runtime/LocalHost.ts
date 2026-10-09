@@ -25,14 +25,18 @@ import { logger, errStr } from '../lib/log.js';
 
 const log = logger('host');
 
-/** A container is named by the WORKSPACE it serves: `phantom-backend-workspace-<workspace
- *  id>`. The name is the ONE key — it is what up/remove open and what the
- *  running-container list reads the id back off. */
-export const NAME_PREFIX = 'phantom-backend-workspace-';
-/** The name before this one. A container still carrying it is removed at boot
- *  (retireOldContainers): stateless, it comes back under the new name on the
- *  next tool call. Drop this once no install can be on a release before it. */
-const OLD_NAME_PREFIX = 'phantom-looper-ws-';
+/** A container is named by the session whose checkout it serves:
+ *  `phantom-backend-session-<id>` (the workspace's id IS its owning session's).
+ *  The name is the ONE key — it is what up/remove open and what the
+ *  running-container list reads the id back off. The session host's own
+ *  container shares the prefix (`phantom-backend-session-host`), so the list
+ *  takes only names whose suffix is an id. */
+export const NAME_PREFIX = 'phantom-backend-session-';
+const isId = (suffix: string) => /^[0-9a-z]{26}$/i.test(suffix);
+/** The names before this one. A container still carrying one is removed at
+ *  boot (retireOldContainers): stateless, it comes back under the new name on
+ *  the next tool call. Drop these once no install can be on a release before. */
+const OLD_NAME_PREFIXES = ['phantom-looper-ws-', 'phantom-backend-workspace-'];
 export const containerName = (workspaceId: string): string => `${NAME_PREFIX}${workspaceId}`;
 
 export interface LocalHostOptions {
@@ -145,10 +149,10 @@ export class LocalHost implements WorkspaceHost {
    *  the checkout is on the volume — so this costs one container start on
    *  the next tool call and nothing else. */
   async retireOldContainers(): Promise<void> {
-    const list = await this.docker.listContainers({ all: true, filters: { name: [OLD_NAME_PREFIX] } }).catch(() => []);
+    const list = await this.docker.listContainers({ all: true }).catch(() => []);
     for (const container of list) {
       const name = (container.Names ?? [])[0]?.replace(/^\//, '') ?? '';
-      if (!name.startsWith(OLD_NAME_PREFIX)) continue;
+      if (!OLD_NAME_PREFIXES.some((prefix) => name.startsWith(prefix))) continue;
       await this.docker.getContainer(container.Id).remove({ force: true, v: true })
         .then(() => log.info({ container: name }, 'old-named workspace container removed — it comes back under the new name'))
         .catch((error) => log.warn({ container: name, err: errStr(error) }, 'old-named workspace container could not be removed'));
@@ -220,7 +224,7 @@ export class LocalHost implements WorkspaceHost {
       // Provenance on the container itself: which host made it, for which
       // workspace. The compose label groups them as one project in Docker
       // Desktop (and `docker compose -p phantom-backend-workspaces ps`).
-      labels: { 'phantom.workspace': key, 'phantom.host': this.name, 'com.docker.compose.project': 'phantom-backend-workspaces' },
+      labels: { 'phantom.workspace': key, 'phantom.host': this.name, 'com.docker.compose.project': 'phantom-backend-sessions' },
     }) as never;
     let created: Docker.Container;
     try {
@@ -277,7 +281,8 @@ export class LocalHost implements WorkspaceHost {
     return list.flatMap((container) => (container.Names ?? [])
       .map((name) => name.replace(/^\//, ''))
       .filter((name) => name.startsWith(NAME_PREFIX))
-      .map((name) => name.slice(NAME_PREFIX.length)));
+      .map((name) => name.slice(NAME_PREFIX.length))
+      .filter(isId));
   }
 
   sandbox(workspaceId: string): Sandbox {
