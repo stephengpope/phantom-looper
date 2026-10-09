@@ -37,7 +37,7 @@
 // single lock the rest of the system uses — no new mutex.
 import type { ProjectRow, SessionRow } from '../storage/schema.js';
 import * as checkoutPool from '../runtime/CheckoutPool.js';
-import type { SessionHosts } from '../host/SessionHosts.js';
+import type { SessionRunners } from '../host/SessionRunners.js';
 import type { Repo } from '../runtime/WorkspaceHost.js';
 import type { Sessions } from '../storage/Sessions.js';
 import type { Workspaces } from '../storage/Workspaces.js';
@@ -138,8 +138,8 @@ export interface SyncDeps {
   workspaces: Workspaces;
   cards: Cards;
   settings: Settings;
-  /** Where each checkout is (host/SessionHosts.ts): the git runs there. */
-  hosts: SessionHosts;
+  /** Where each checkout is (host/SessionRunners.ts): the git runs there. */
+  hosts: SessionRunners;
   /** Hand the stopped rebase to the session's own coding agent, as a turn in
    *  its own transcript. Resolves, stages and continues the rebase; the sync
    *  verifies against the repo afterward. Absent -> a conflict blocks.

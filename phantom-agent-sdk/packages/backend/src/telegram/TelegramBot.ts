@@ -31,7 +31,7 @@ import { SERVICE_ROLE_ORGANIZATION } from '../lib/scopes.js';
 import type { Settings } from '../storage/Settings.js';
 import type { SettingsEvents } from '../agents/SettingsEvents.js';
 import { timingSafeEqualStr } from '../lib/crypto.js';
-import type { SessionHosts } from '../host/SessionHosts.js';
+import type { SessionRunners } from '../host/SessionRunners.js';
 import { logger, errStr } from '../lib/log.js';
 
 const log = logger('telegram');
@@ -76,8 +76,8 @@ export interface TelegramBotDeps {
   chats: TelegramChats;
   sessions: Sessions;
   projects: Projects;
-  /** Where each session's files are (host/SessionHosts.ts). */
-  hosts: SessionHosts;
+  /** Where each session's files are (host/SessionRunners.ts). */
+  hosts: SessionRunners;
   /** https://BACKEND_ADDRESS — the only source of the webhook URL. */
   publicAddress?: string;
   /** The command menu to register with Telegram (the app's commands): the

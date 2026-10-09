@@ -1,5 +1,5 @@
 // Link — THE persistent connection to the backend, both directions, for
-// everything that holds a line open: a cli window's feeds, a session host's
+// everything that holds a line open: a cli window's feeds, a session runner's
 // job channel, an engine watching a session. One object, one policy:
 //
 //   DOWN  an ND-JSON feed (GET), followed forever: a link that goes silent

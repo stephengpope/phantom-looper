@@ -36,7 +36,7 @@ import { API_IMAGE, APP_VERSION } from '../lib/env.js';
 import type { Settings } from '../storage/Settings.js';
 import type { Projects } from '../storage/Projects.js';
 import type { Sessions } from '../storage/Sessions.js';
-import type { SessionHosts } from '../host/SessionHosts.js';
+import type { SessionRunners } from '../host/SessionRunners.js';
 import type { SessionContainers } from './SessionContainers.js';
 import type { Images } from './Images.js';
 import type { GitSync } from '../git/GitSync.js';
@@ -216,10 +216,10 @@ export async function diskCleanup(deps: CleanupDeps): Promise<void> {
 }
 
 /** Disk cleanup against the real system — THIS server's disk, and only the
- *  workspaces on it: a session host's disk is its own, and deleting a
+ *  workspaces on it: a session runner's disk is its own, and deleting a
  *  workspace there would free nothing here. */
 export async function pressureSweep(
-  settings: Settings, projects: Projects, sessions: Sessions, hosts: SessionHosts, images: Images,
+  settings: Settings, projects: Projects, sessions: Sessions, hosts: SessionRunners, images: Images,
   sessionContainers: SessionContainers, gitSync: GitSync, busy: (workspaceIds: string[]) => Promise<Set<string>>,
 ): Promise<void> {
   if (!hosts.runsContainers) return;

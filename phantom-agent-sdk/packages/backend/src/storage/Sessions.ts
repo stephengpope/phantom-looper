@@ -41,7 +41,7 @@ import { logger } from '../lib/log.js';
 import { withoutUsageLines, systemPromptRebuiltLine } from '@phantom-agent-sdk/client/transcript';
 import type { SystemPromptLayout, StoredSystemPrompt } from '@phantom-agent-sdk/client/systemPrompt';
 import { SystemPrompt, type SystemPromptSource } from '../agents/SystemPrompt.js';
-import type { SessionHosts } from '../host/SessionHosts.js';
+import type { SessionRunners } from '../host/SessionRunners.js';
 import type Docker from 'dockerode';
 import type { SessionEvents } from '../agents/SessionEvents.js';
 import { scopeOf } from '../lib/scopes.js';
@@ -188,7 +188,7 @@ export class Sessions {
       events?: SessionEvents;
       /** What freezing a session's prompt reads: the checkout's skills and the
        *  image's system skills. Absent in tests: `start` then freezes no skills. */
-      prompt?: { hosts: SessionHosts; docker?: Docker; media?: SystemPromptSource['media'] };
+      prompt?: { hosts: SessionRunners; docker?: Docker; media?: SystemPromptSource['media'] };
     },
   ) {}
   private get events(): SessionEvents | undefined { return this.deps.events; }
@@ -275,7 +275,7 @@ export class Sessions {
   private static readonly lastUsedAt = sqlRaw<Date>`coalesce(${workspaces.lastUsedAt}, ${sessions.createdAt})`.mapWith((raw) => new Date(raw));
   private static readonly view = {
     ...sessionColumns, branch: workspaces.branch, status: Sessions.status, lastUsedAt: Sessions.lastUsedAt,
-    lastPushAt: workspaces.lastPushAt, workState: workspaces.workState, sessionHostId: workspaces.sessionHostId,
+    lastPushAt: workspaces.lastPushAt, workState: workspaces.workState, sessionRunnerId: workspaces.sessionRunnerId,
   };
   /** `select view from sessions left join workspaces` — every read starts here. */
   private from() {

@@ -4,10 +4,10 @@
 // the workspace is placed on. Two implementations:
 //
 //   LocalHost   the primitives, run here: this process's volume and Docker.
-//               The backend's own host on every server, and the body of a
-//               session host process (host/SessionHost.ts), which runs the
+//               The backend's own runner on every server, and the body of a
+//               session runner process (host/SessionRunner.ts), which runs the
 //               same code against ITS volume and Docker.
-//   RemoteHost  the same primitives as jobs over a session host's link —
+//   RemoteHost  the same primitives as jobs over a session runner's link —
 //               a proxy; nothing runs in this process.
 //
 // What stays in the backend: every decision. Which image and limits a
@@ -77,7 +77,7 @@ export type DetachEvent =
   | { event: 'exit'; status: 'exited' | 'killed' | 'orphaned'; exitCode: number | null };
 
 export interface WorkspaceHost {
-  /** The host's row id; null is the backend's own host (this process). */
+  /** The host's row id; null is the backend's own runner (this process). */
   readonly id: string | null;
   readonly name: string;
   /** Online right now. The backend's own always is; a remote host is while

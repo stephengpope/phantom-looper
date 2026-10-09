@@ -50,13 +50,13 @@ export { makeDocker } from './runtime/Docker.js';
 export { PullTracker } from './runtime/Images.js';
 export { buildContainerSpec, type ContainerOpts } from './runtime/SessionContainers.js';
 export type { RunOpts, RunResult, StreamRecord, Exec } from './runtime/Sandbox.js';
-// Session hosts: the primitives every workspace call goes through, the
+// Session runners: the primitives every workspace call goes through, the
 // built-in and remote implementations, the registry, the host process.
 export type { WorkspaceHost, Repo, WorkspaceFiles, ContainerPlan, ContainerState, DetachEvent } from './runtime/WorkspaceHost.js';
 export { LocalHost, type LocalHostOptions } from './runtime/LocalHost.js';
 export { RemoteHost } from './runtime/RemoteHost.js';
-export { SessionHosts, SessionHostError, type HostCaller, type SessionHostView } from './host/SessionHosts.js';
-export { SessionHost, type SessionHostOptions } from './host/SessionHost.js';
+export { SessionRunners, SessionRunnerError, type HostCaller, type SessionRunnerView } from './host/SessionRunners.js';
+export { SessionRunner, type SessionRunnerOptions } from './host/SessionRunner.js';
 export type { Job, JobEvent, HostHello, HostFacts } from './host/protocol.js';
 export { systemSkills, systemSkillTree, SYSTEM_SKILLS_DIR, type SystemSkill, type SystemSkillTree } from './runtime/SystemSkills.js';
 export { webSearch, webFetch, urlSlug, type SearchBody, type WebDeps } from './runtime/Web.js';

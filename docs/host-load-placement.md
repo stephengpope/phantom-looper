@@ -1,11 +1,11 @@
 # Placing by load: CPU, not file counts
 
-Built: `SessionHosts.place`, the heartbeat in `SessionHost`, `RemoteHost.load`.
+Built: `SessionRunners.place`, the heartbeat in `SessionRunner`, `RemoteHost.load`.
 
 ## Before
 
-Placement (host/SessionHosts.ts `place`) picked a tier — the user's own hosts,
-then shared hosts, then the server — and inside a tier ordered by the number
+Placement (host/SessionRunners.ts `place`) picked a tier — the user's own runners,
+then shared runners, then the server — and inside a tier ordered by the number
 of workspaces with files on disk, then by most recent connection. The count
 was a proxy: a host with two idle checkouts and a host with two agents
 compiling looked the same, and a host with 5 GB free looked like one with 500.
@@ -26,7 +26,7 @@ Put the box's load on that beat:
 - `running`: running session containers, `LocalHost.activeWorkspaces().length`.
 
 The backend keeps the last beat per host in memory (RemoteHost) and shows it
-on `GET /api/session-hosts` and in `phantom-cli host status`.
+on `GET /api/session-runners` and in `phantom-cli runner status`.
 
 ## The rule
 
@@ -62,8 +62,8 @@ worth a row.
 
 ## Open
 
-- Whether a user's own host should ever be skipped for a shared one on load.
-  Proposed: no. A user host is theirs; load only orders among their own.
+- Whether a user's own runner should ever be skipped for a shared one on load.
+  Proposed: no. A user runner is theirs; load only orders among their own.
 - A tool-call ceiling for an offline host (give up after N minutes with a
   retryable `host_offline`) is a separate decision, noted here because the
   same beat is what proves a host alive.

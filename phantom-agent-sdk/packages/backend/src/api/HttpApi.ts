@@ -52,7 +52,7 @@ import { TELEGRAM_WEBHOOK_PATH } from '../telegram/webhookPath.js';
 import { mailRoutes } from './routes/mail.js';
 import { mediaRoutes } from './routes/media.js';
 import { identityRoutes } from './routes/identity.js';
-import { sessionHostRoutes } from './routes/sessionHosts.js';
+import { sessionRunnerRoutes } from './routes/sessionRunners.js';
 import { IDENTITY_PATH, IdentityError, type Caller } from '../identity/Identity.js';
 import { actAs, type Acting } from '../lib/acting.js';
 import { logger, errStr } from '../lib/log.js';
@@ -163,7 +163,7 @@ export class HttpApi {
       mailRoutes(api, backend);
       mediaRoutes(api, backend);
       identityRoutes(api, backend);
-      sessionHostRoutes(api, backend);
+      sessionRunnerRoutes(api, backend);
     }, { prefix: '/api' });
 
     // A browser app on another origin (identity.trustedOrigins) may call

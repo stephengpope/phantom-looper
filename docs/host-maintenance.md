@@ -1,11 +1,11 @@
-# Maintenance on session hosts: warm checkouts and disk cleanup
+# Maintenance on session runners: warm checkouts and disk cleanup
 
 A plan. Not built.
 
 ## The problem
 
 Two of the backend's maintenance jobs run only on the API's own machine. A
-session host never gets them:
+session runner never gets them:
 
 1. **Warm checkouts** (`CheckoutPool.tick`): hosts never pre-clone. Every new
    session on a host is a full clone (`LocalHost.checkout` tries `claimSlot`,
@@ -46,7 +46,7 @@ host's tick and the API's never collide.
 host that runs the checkout; what is new is that a host receives tokens for
 projects nobody has opened there yet. **Rule: a host is stocked only for
 projects that have had a workspace on it before** (one query on
-`workspaces.session_host_id`). A fresh host stocks nothing until its first
+`workspaces.session_runner_id`). A fresh host stocks nothing until its first
 session; from then on that project is warm there.
 
 ### 2. Disk cleanup — decisions on the API, deletion on the host

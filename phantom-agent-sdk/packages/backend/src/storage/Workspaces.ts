@@ -27,7 +27,7 @@ import type { SessionEvents } from '../agents/SessionEvents.js';
 import type { Settings } from './Settings.js';
 import { checkoutBranch, classifyGitFailure, localState, type WorkState } from '../git/Git.js';
 import { resolveAuth } from '../runtime/CheckoutPool.js';
-import type { SessionHosts } from '../host/SessionHosts.js';
+import type { SessionRunners } from '../host/SessionRunners.js';
 import type { WorkspaceHost } from '../runtime/WorkspaceHost.js';
 import { acting } from '../lib/acting.js';
 import { logger } from '../lib/log.js';
@@ -50,8 +50,8 @@ export interface WorkRefreshWorkspace {
 export class Workspaces {
   constructor(
     private readonly database: Drizzle,
-    /** The hosts a checkout can live on, and where each one is (host/SessionHosts.ts). */
-    private readonly hosts: SessionHosts,
+    /** The hosts a checkout can live on, and where each one is (host/SessionRunners.ts). */
+    private readonly hosts: SessionRunners,
     private readonly settings: Settings,
     /** The per-session feed; absent in tests that have no watchers. */
     private readonly events?: SessionEvents,
@@ -134,8 +134,8 @@ export class Workspaces {
   async checkout(project: ProjectRow, id: string, opts: { fromBranch?: string } = {}): Promise<WorkspaceRow> {
     const branch = `${project.branchPrefix}/${id}`;
     // PLACEMENT, once: the host this checkout lives on from now on (the
-    // acting user's own host when they have one online, else a shared one,
-    // else this server — host/SessionHosts.ts).
+    // acting user's own runner when they have one online, else a shared one,
+    // else this server — host/SessionRunners.ts).
     const host = await this.hosts.place(project, acting()?.userId ?? null);
     this.hosts.remember(id, host.id);
     let obtained;
@@ -143,7 +143,7 @@ export class Workspaces {
     catch (error) { this.hosts.forget(id); throw error; }
     const { head, found, claimed } = obtained;
     const [row] = await this.database.insert(workspaces)
-      .values({ id, projectId: project.id, branch, cutFromSha: head, sessionHostId: host.id, createdAt: new Date() }).returning();
+      .values({ id, projectId: project.id, branch, cutFromSha: head, sessionRunnerId: host.id, createdAt: new Date() }).returning();
     log.info({ workspace: id, project: `${project.owner}/${project.name}`, branch, found, claimed, cutFromSha: head, host: host.name },
       'checkout made');
     return row;

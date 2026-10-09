@@ -55,8 +55,8 @@ COPY cloudbeaver/cloudbeaver.conf /host-files/cloudbeaver/
 
 COPY updater/ /host-files/updater/
 COPY host/ /host-files/host/
-# A session host's compose file, extracted the same way (phantom host start).
-COPY session-host/ /host-files/session-host/
+# A session runner's compose file, extracted the same way (phantom-cli runner start).
+COPY session-runner/ /host-files/session-runner/
 USER node
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

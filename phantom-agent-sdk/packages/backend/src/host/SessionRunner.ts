@@ -1,4 +1,4 @@
-// SessionHost — the host process: a box with Docker and a workspace volume
+// SessionRunner — the host process: a box with Docker and a workspace volume
 // that connects OUT to a backend and runs its workspaces. The same backend
 // image, this entrypoint instead of the API's; no database, no settings, no
 // secrets of its own — every job carries what it needs, and the host trusts
@@ -28,15 +28,15 @@ import { type Job, type JobEvent, type HostHello, type HostLoad, encodeError, fr
 import { SDK_VERSION } from '../sdkVersion.js';
 import { logger, errStr } from '../lib/log.js';
 
-const log = logger('session-host');
+const log = logger('session-runner');
 
 /** The host's calls to the backend: local or one hop away. */
 const HOST_RETRY: RetryPolicy = { waitsS: [1, 2, 4, 8], budgetMs: 15_000, retryable: (status) => status === 408 || status === 429 || status >= 500 };
 
-export interface SessionHostOptions {
+export interface SessionRunnerOptions {
   /** The backend's origin, e.g. https://phantom.example.com */
   origin: string;
-  /** The service role key (a shared host) or a user role key (their host). */
+  /** The service role key (a shared runner) or a user role key (their host). */
   key: string;
   name: string;
   paths: Paths;
@@ -45,7 +45,7 @@ export interface SessionHostOptions {
   certificateAuthority?: Buffer;
 }
 
-export class SessionHost {
+export class SessionRunner {
   readonly boot = newId();
   #backend: BackendClient;
   readonly #local: LocalHost;
@@ -60,7 +60,7 @@ export class SessionHost {
   readonly #doneSet = new Set<string>();
   #stopped = false;
 
-  constructor(private readonly opts: SessionHostOptions) {
+  constructor(private readonly opts: SessionRunnerOptions) {
     // One HTTPS/2 socket for everything, as the cli has: the backend's TLS,
     // its own CA when it runs one (BACKEND_CA). There is no other transport.
     const origin = new URL(opts.origin).origin;
@@ -69,7 +69,7 @@ export class SessionHost {
     // The key says which it is by its prefix; a key with neither is refused
     // here, before it is sent anywhere.
     const credential = credentialOf(opts.key);
-    if (!credential) throw new Error(`BACKEND_KEY must be the service role key (${SERVICE_ROLE_KEY_PREFIX}…, a shared host) or your user role key (${USER_ROLE_KEY_PREFIX}…, your host)`);
+    if (!credential) throw new Error(`BACKEND_KEY must be the service role key (${SERVICE_ROLE_KEY_PREFIX}…, a shared runner) or your user role key (${USER_ROLE_KEY_PREFIX}…, your host)`);
     this.#backend = this.#client(credential);
     this.#local = new LocalHost(opts.docker, new Images(opts.docker), opts.paths, opts.local, { id: null, name: opts.name });
   }
@@ -77,7 +77,7 @@ export class SessionHost {
   readonly #connection: BackendConnection;
   #client(credential: Credential): BackendClient {
     return new BackendClient({
-      url: `${new URL(this.opts.origin).origin}/api`, credential, clientId: `session-host-${this.boot}`, label: this.opts.name,
+      url: `${new URL(this.opts.origin).origin}/api`, credential, clientId: `session-runner-${this.boot}`, label: this.opts.name,
       fetch: (input, init) => this.#connection.fetch(input, init), retry: { policy: HOST_RETRY, notice: (text) => log.warn(text) },
     });
   }
@@ -88,13 +88,13 @@ export class SessionHost {
   }
 
   /** From the environment — the compose service's one way in. */
-  static fromEnv(env: NodeJS.ProcessEnv = process.env): SessionHost {
+  static fromEnv(env: NodeJS.ProcessEnv = process.env): SessionRunner {
     const origin = env.BACKEND_URL;
     const key = env.BACKEND_KEY;
     if (!origin) throw new Error('BACKEND_URL is not set — the backend this host connects to');
-    if (!key) throw new Error('BACKEND_KEY is not set — the service role key (a shared host) or your user role key (your host)');
+    if (!key) throw new Error('BACKEND_KEY is not set — the service role key (a shared runner) or your user role key (your host)');
     const root = env.WORKSPACE_ROOT_PATH || '/workspaces';
-    return new SessionHost({
+    return new SessionRunner({
       origin, key,
       name: env.HOST_NAME || os.hostname(),
       paths: makePaths(root),
@@ -143,13 +143,13 @@ export class SessionHost {
       sdkVersion: SDK_VERSION,
     };
     const hello: HostHello = { ...(persisted.id ? { id: persisted.id } : {}), name: this.opts.name, boot: this.boot, facts };
-    const row = await this.#backend.call<{ id: string; name: string }>('POST', '/session-hosts/hello', hello);
+    const row = await this.#backend.call<{ id: string; name: string }>('POST', '/session-runners/hello', hello);
     this.#id = row.id;
     if (persisted.id !== row.id) await fs.writeFile(idFile, JSON.stringify({ id: row.id }) + '\n');
-    log.info({ host: row.id, name: this.opts.name, boot: this.boot, facts }, 'session host registered — opening the feed');
+    log.info({ host: row.id, name: this.opts.name, boot: this.boot, facts }, 'session runner registered — opening the feed');
     this.#link = new Link(this.#backend, {
-      feed: `/session-hosts/${row.id}/jobs?boot=${encodeURIComponent(this.boot)}`,
-      relay: `/session-hosts/${row.id}/jobs/events`,
+      feed: `/session-runners/${row.id}/jobs?boot=${encodeURIComponent(this.boot)}`,
+      relay: `/session-runners/${row.id}/jobs/events`,
       onRecord: (record) => { if (record.event !== 'heartbeat') this.#onJob(record as unknown as Job); },
       reset: () => this.#connection.destroy(),
       onStatus: (up) => log.info({ host: row.id }, up ? 'link up' : 'link down — jobs keep running, events queue'),

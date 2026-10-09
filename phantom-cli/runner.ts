@@ -1,17 +1,17 @@
-// `phantom-cli host` — a session host on THIS machine: a box that runs your
+// `phantom-cli runner` — a session runner on THIS machine: a box that runs your
 // workspaces for the backend you are paired with. Docker runs it, from the
-// same compose file a server runs (session-host/ in the
+// same compose file a server runs (session-runner/ in the
 // release image): `start` extracts that file from the release's image,
 // writes its .env from the pairing (the url, the key, this machine's name),
 // and brings it up; `stop` takes it down (the volume stays); `status` asks
 // the backend what it sees.
 //
-//   phantom-cli host start [--name <label>] [--tag <vX.Y.Z>]
-//   phantom-cli host stop
-//   phantom-cli host status
-//   phantom-cli host logs
+//   phantom-cli runner start [--name <label>] [--tag <vX.Y.Z>]
+//   phantom-cli runner stop
+//   phantom-cli runner status
+//   phantom-cli runner logs
 //
-// The key is the one the cli holds: the service role key makes a SHARED host
+// The key is the one the cli holds: the service role key makes a SHARED runner
 // (any workspace may land here); your own user role key makes YOUR host (your
 // workspaces alone). The key's prefix says which. Nothing listens on this machine — the host dials out.
 import { existsSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
@@ -23,7 +23,7 @@ import { localValues } from './local.js';
 import { savedCaFor, apiFor } from './provision.js';
 import { APP_VERSION } from './selfUpdate.js';
 
-const HOST_DIR = join(CONFIG_DIR, 'host');
+const HOST_DIR = join(CONFIG_DIR, 'runner');
 const IMAGE = 'ghcr.io/stephengpope/phantom-backend';
 
 function sh(command: string, args: string[], opts: { cwd?: string; capture?: boolean } = {}): SpawnSyncReturns<string> {
@@ -53,8 +53,8 @@ function extractComposeFiles(tag: string): void {
   if (created.status !== 0) throw new Error(`could not create a container from ${image}: ${created.stderr}`);
   const cid = created.stdout.trim();
   try {
-    const copied = sh('docker', ['cp', `${cid}:/host-files/session-host/.`, `${HOST_DIR}/`], { capture: true });
-    if (copied.status !== 0) throw new Error(`the image has no session-host files (released before session hosts?): ${copied.stderr}`);
+    const copied = sh('docker', ['cp', `${cid}:/host-files/session-runner/.`, `${HOST_DIR}/`], { capture: true });
+    if (copied.status !== 0) throw new Error(`the image has no session-runner files (released before session runners?): ${copied.stderr}`);
   } finally {
     sh('docker', ['rm', '-f', cid], { capture: true });
   }
@@ -74,9 +74,9 @@ function compose(args: string[]): number {
   return sh('docker', ['compose', ...args], { cwd: HOST_DIR }).status ?? 1;
 }
 
-export async function runHost(args: string[]): Promise<number> {
+export async function runRunner(args: string[]): Promise<number> {
   const command = args[0];
-  const usage = () => { console.log('usage: phantom-cli host start [--name <label>] [--tag <vX.Y.Z>] | stop | status | logs'); return 2; };
+  const usage = () => { console.log('usage: phantom-cli runner start [--name <label>] [--tag <vX.Y.Z>] | stop | status | logs'); return 2; };
   if (!command || command === '--help' || command === '-h') return usage();
 
   const local = localValues();
@@ -93,23 +93,23 @@ export async function runHost(args: string[]): Promise<number> {
       BACKEND_URL: url, BACKEND_KEY: key, HOST_NAME: name, BACKEND_TAG: tag,
       BACKEND_CA: ca ?? '',
     });
-    console.log(`starting session host "${name}" for ${url} (${IMAGE}:${tag})`);
+    console.log(`starting session runner "${name}" for ${url} (${IMAGE}:${tag})`);
     const code = compose(['up', '-d']);
-    if (code === 0) console.log('session host up — `phantom-cli host status` shows what the backend sees, `phantom-cli host logs` follows it');
+    if (code === 0) console.log('session runner up — `phantom-cli runner status` shows what the backend sees, `phantom-cli runner logs` follows it');
     return code;
   }
-  if (!existsSync(join(HOST_DIR, 'docker-compose.yml'))) { console.error('no session host on this machine — phantom-cli host start'); return 1; }
+  if (!existsSync(join(HOST_DIR, 'docker-compose.yml'))) { console.error('no session runner on this machine — phantom-cli runner start'); return 1; }
   if (command === 'stop') return compose(['down']);
-  if (command === 'logs') return compose(['logs', '-f', 'session-host']);
+  if (command === 'logs') return compose(['logs', '-f', 'session-runner']);
   if (command === 'status') {
     compose(['ps']);
     try {
-      const listed = await apiFor(url, key, savedCaFor(url))('GET', '/session-hosts') as { hosts: Array<{ id: string; name: string; online: boolean; ownerUserId: string | null; workspaces: number; connectedAt: string | null; load: { cpu: number; freeGB: number; usedPct: number; running: number } | null }> };
-      if (!listed.hosts.length) { console.log('the backend knows no session hosts'); return 0; }
+      const listed = await apiFor(url, key, savedCaFor(url))('GET', '/session-runners') as { hosts: Array<{ id: string; name: string; online: boolean; ownerUserId: string | null; workspaces: number; connectedAt: string | null; load: { cpu: number; freeGB: number; usedPct: number; running: number } | null }> };
+      if (!listed.hosts.length) { console.log('the backend knows no session runners'); return 0; }
       console.log('\nthe backend sees:');
       for (const host of listed.hosts) {
         const load = host.load ? `  cpu ${host.load.cpu.toFixed(2)}  ${host.load.running} running  ${Math.round(host.load.freeGB)} GB free` : '';
-        console.log(`  ${host.online ? '●' : '○'} ${host.name}  ${host.ownerUserId ? 'user host' : 'shared host'}  ${host.workspaces} workspace${host.workspaces === 1 ? '' : 's'}${load}  ${host.online ? 'online' : `offline${host.connectedAt ? ` (last ${host.connectedAt})` : ''}`}  ${host.id}`);
+        console.log(`  ${host.online ? '●' : '○'} ${host.name}  ${host.ownerUserId ? 'user runner' : 'shared runner'}  ${host.workspaces} workspace${host.workspaces === 1 ? '' : 's'}${load}  ${host.online ? 'online' : `offline${host.connectedAt ? ` (last ${host.connectedAt})` : ''}`}  ${host.id}`);
       }
     } catch (error) { console.error(`could not ask the backend: ${(error as Error).message}`); return 1; }
     return 0;

@@ -1,7 +1,7 @@
-// The job protocol between the backend and a session host — the ONLY
+// The job protocol between the backend and a session runner — the ONLY
 // vocabulary the two speak. Jobs go DOWN the host's feed
-// (GET /session-hosts/:id/jobs, ND-JSON); their events come UP the relay
-// (POST /session-hosts/:id/jobs/events). Every job names a primitive of
+// (GET /session-runners/:id/jobs, ND-JSON); their events come UP the relay
+// (POST /session-runners/:id/jobs/events). Every job names a primitive of
 // runtime/WorkspaceHost.ts and carries everything the host needs to run it.
 //
 // A job ends with exactly one `result` or `error`; a streaming job (exec

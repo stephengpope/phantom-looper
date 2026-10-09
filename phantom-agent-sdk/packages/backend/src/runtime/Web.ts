@@ -11,12 +11,12 @@
 // /workspace/web/<name>.md, the path the container (and so the read tool)
 // sees. Same host-write pattern as the detached-bash logs in fs.ts.
 import type { Settings } from '../storage/Settings.js';
-import type { SessionHosts } from '../host/SessionHosts.js';
+import type { SessionRunners } from '../host/SessionRunners.js';
 import type { WorkspaceFiles } from './WorkspaceHost.js';
 import { textOf } from '../lib/text.js';
 
 /** What the web calls need of the backend: the Firecrawl key and where a fetched page lands (the workspace's host). */
-export interface WebDeps { settings: Settings; sessionHosts: SessionHosts }
+export interface WebDeps { settings: Settings; sessionRunners: SessionRunners }
 import { ToolError } from '../tools/envelope.js';
 import { actingScope, type SettingScope } from '../lib/scopes.js';
 
@@ -134,7 +134,7 @@ export async function webSearch(ctx: WebDeps, b: SearchBody, scope: SettingScope
  *  is an error entry; the call itself succeeds. */
 export async function webFetch(ctx: WebDeps, workspaceId: string, urls: string[], scope: SettingScope = actingScope()): Promise<FetchEntry[]> {
   const key = await keyOf(ctx, scope);
-  const files = (await ctx.sessionHosts.of(workspaceId)).files(workspaceId);
+  const files = (await ctx.sessionRunners.of(workspaceId)).files(workspaceId);
   const taken = new Set<string>();
   // In input order; fetched in parallel — the slug set is claimed
   // synchronously per entry inside fetchOne before any await on the write.

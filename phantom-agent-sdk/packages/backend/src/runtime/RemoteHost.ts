@@ -1,4 +1,4 @@
-// RemoteHost — a session host as the backend sees it: every primitive of
+// RemoteHost — a session runner as the backend sees it: every primitive of
 // WorkspaceHost sent as a job down the host's feed, its answer read off the
 // relay. A proxy; nothing runs here.
 //
@@ -52,8 +52,8 @@ export class RemoteHost implements WorkspaceHost {
     if (this.#boot !== null && this.#boot !== boot) {
       const gone = [...this.#pending.values()];
       this.#pending.clear();
-      log.warn({ host: this.id, jobs: gone.length }, 'session host restarted — its jobs in flight are gone');
-      for (const pending of gone) pending.reject(Object.assign(new Error(`session host ${this.name} restarted — the job did not finish`), { code: 'host_restarted', retryable: true }));
+      log.warn({ host: this.id, jobs: gone.length }, 'session runner restarted — its jobs in flight are gone');
+      for (const pending of gone) pending.reject(Object.assign(new Error(`session runner ${this.name} restarted — the job did not finish`), { code: 'host_restarted', retryable: true }));
     }
     this.#boot = boot;
     this.#writer = writer;

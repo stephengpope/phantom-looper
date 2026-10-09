@@ -1,27 +1,27 @@
-# A SESSION HOST: a box that runs workspaces for a phantom-backend somewhere
-# else. The same image as the API with the host entrypoint, the same named
+# A SESSION RUNNER: a box that runs workspaces for a phantom-backend somewhere
+# else. The same image as the API with the runner entrypoint, the same named
 # volume, the same socket proxy — on a server someone runs, or on a Mac
-# (`phantom host start` writes this file's .env and runs it).
+# (`phantom-cli runner start` writes this file's .env and runs it).
 #
-# The host connects OUT to the backend; nothing listens here. Three values in
+# The runner connects OUT to the backend; nothing listens here. Three values in
 # .env say everything: BACKEND_URL, BACKEND_KEY (the service role key makes a
-# SHARED host any workspace may land on; a user role key makes THEIR host, for
+# SHARED runner any workspace may land on; a user role key makes THEIR runner, for
 # their workspaces alone — the key's prefix says which), and HOST_NAME (a
 # label; defaults to the container's).
-name: phantom-backend-session-host
+name: phantom-backend-session-runner
 
 services:
-  session-host:
-    container_name: phantom-backend-session-host
+  session-runner:
+    container_name: phantom-backend-session-runner
     image: ${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}:${BACKEND_TAG:-latest}
     pull_policy: missing
     restart: unless-stopped
     depends_on:
       docker-proxy:
         condition: service_started
-    command: ["node", "dist/phantom-backend/host.js"]
+    command: ["node", "dist/phantom-backend/runner.js"]
     # The image's health probe is the API's (/api/health on 8080); a host
-    # serves no port. Its health is what `phantom-cli host status` asks the backend.
+    # serves no port. Its health is what `phantom-cli runner status` asks the backend.
     healthcheck:
       disable: true
     environment:
