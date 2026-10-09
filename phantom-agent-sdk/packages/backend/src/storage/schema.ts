@@ -85,6 +85,10 @@ export const cards = phantomAgentSdk.table('cards', {
   archived: boolean('archived').notNull().default(false),
   created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  // Whose it is (059): its project's organization, set by a trigger; the
+  // user who made it (null = the service role). A card run acts for them.
+  organization_id: text('organization_id').notNull().default(sql`coalesce(phantom_agent_sdk.caller_organization(), phantom_agent_sdk.service_role_organization())`),
+  user_id: text('user_id').default(sql`phantom_agent_sdk.caller_user()`),
 }, (table) => [unique().on(table.project_id, table.number)]);
 
 // A card's history, written by a trigger on every update (024, 028, 033) so

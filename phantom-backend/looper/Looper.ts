@@ -47,14 +47,27 @@ export class Looper {
   /** The agents with a turn in flight, by session id — stop() interrupts them. */
   private agents = new Map<string, Agent>();
   /** One client, this looper's lock identity, for every agent it opens. */
-  private readonly client: BackendClient;
+  /** One client per card owner: the run acts for the card's organization and
+   *  the user who made it (059), so every row it touches is fenced as theirs
+   *  and their keys resolve first — the cron's rule (CronScheduler.#clientFor). */
+  readonly #clients = new Map<string, BackendClient>();
 
   /** On the backend's objects: the board, the sessions, the settings, the
    *  token log (the budget's coin), and its three feeds — the board bus runs
    *  the loop, the settings feed re-examines a project when a loop switch
    *  moves, the session feed re-runs a card when a hold is released. */
   constructor(private readonly backend: PhantomBackend, private readonly automation: CardAutomation) {
-    this.client = new BackendClient({ url: backend.loopback.url, credential: { serviceRoleKey: backend.loopback.serviceRoleKey }, clientId: CLIENT_ID, label: 'card run', actor: LOOPER_STARTER });
+  }
+
+  #clientFor(card: CardRow): BackendClient {
+    const who = `${card.organization_id}/${card.user_id ?? ''}`;
+    let client = this.#clients.get(who);
+    if (!client) {
+      client = new BackendClient({ url: this.backend.loopback.url, credential: { serviceRoleKey: this.backend.loopback.serviceRoleKey },
+        clientId: CLIENT_ID, label: 'card run', actor: LOOPER_STARTER, actingFor: { organizationId: card.organization_id, ...(card.user_id ? { userId: card.user_id } : {}) } });
+      this.#clients.set(who, client);
+    }
+    return client;
   }
 
   /** What an agent this looper runs tells it: errors and notices go to the log. */
@@ -227,7 +240,7 @@ export class Looper {
     let codingAgent: CodingAgent;
     let supervisorSessionId: string;
     if (coder && !fresh) {
-      codingAgent = await CodingAgent.resumeSession(this.client, this.handlers(card.number, 'coding'), coder.id);
+      codingAgent = await CodingAgent.resumeSession(this.#clientFor(card), this.handlers(card.number, 'coding'), coder.id);
       // The supervisor: born for THIS coder. One older than the coder
       // belonged to an earlier run — a fresh one is made.
       const sup = await this.backend.sessions.newestOnCard(project.id, card.number, 'supervisor');
@@ -236,7 +249,7 @@ export class Looper {
         : await this.newSupervisor(project, card, coder.id);
     } else {
       // A new run: the coder (with its workspace), put on the card the moment it exists.
-      codingAgent = await CodingAgent.newSession(this.client, this.handlers(card.number, 'coding'), project.id);
+      codingAgent = await CodingAgent.newSession(this.#clientFor(card), this.handlers(card.number, 'coding'), project.id);
       const sessionId = codingAgent.session.id;
       await this.backend.sessions.setCard(sessionId, card.id);
       // The coder's session is named after its card from birth — /resume
@@ -297,7 +310,7 @@ export class Looper {
       return skippedIfLocked(await run(codingAgent, opener.text), 'card');
     }
 
-    const supervisor = await SupervisorAgent.resumeSession(this.client, this.handlers(card.number, 'supervisor'), supervisorSessionId);
+    const supervisor = await SupervisorAgent.resumeSession(this.#clientFor(card), this.handlers(card.number, 'supervisor'), supervisorSessionId);
     const step = nextStep(card, codingAgent.session.messages, supervisor.session.messages);
     if (!step) { await codingAgent.close(); await supervisor.close(); return 'idle'; }
 

@@ -8,7 +8,10 @@
 import { eq } from 'drizzle-orm';
 import type { Drizzle } from '../storage/Database.js';
 import { telegramBotState } from '../storage/schema.js';
-import { encrypt, decrypt } from '../lib/crypto.js';
+import { encrypt, decrypt, decryptUnbound } from '../lib/crypto.js';
+
+/** The name the secret's blob is bound to (lib/crypto.ts): the one row there is. */
+const ROW = 'telegram_bot_state:webhook_secret';
 
 export interface TelegramBotStateRow {
   webhookSecret: string | null;
@@ -31,7 +34,7 @@ export class TelegramBotState {
     const row = rows[0];
     let webhookSecret: string | null = null;
     if (row.webhookSecretEnc) {
-      try { webhookSecret = decrypt(this.encryptionKey, row.webhookSecretEnc); } catch { /* re-mint on next register */ }
+      try { webhookSecret = decrypt(this.encryptionKey, row.webhookSecretEnc, ROW); } catch { /* re-mint on next register */ }
     }
     return { webhookSecret, webhookUrl: row.webhookUrl, botUsername: row.botUsername };
   }
@@ -43,7 +46,19 @@ export class TelegramBotState {
 
   /** The webhook is registered: its secret (encrypted at rest), URL and bot. */
   async saveRegistration(secret: string, url: string, botUsername: string | null): Promise<void> {
-    await this.patch({ webhookSecretEnc: encrypt(this.encryptionKey, secret), webhookUrl: url, botUsername });
+    await this.patch({ webhookSecretEnc: encrypt(this.encryptionKey, secret, ROW), webhookUrl: url, botUsername });
+  }
+
+  /** Boot, once per install: a secret written before blobs were bound to
+   *  their row is written back bound (lib/crypto.ts). Remove once no
+   *  install can be on a release before v0.1.93. */
+  async bindRows(): Promise<void> {
+    const [row] = await this.database.select().from(telegramBotState).where(eq(telegramBotState.id, 1));
+    if (!row?.webhookSecretEnc) return;
+    try { decrypt(this.encryptionKey, row.webhookSecretEnc, ROW); return; } catch { /* not bound yet, or unreadable */ }
+    let plain: string;
+    try { plain = decryptUnbound(this.encryptionKey, row.webhookSecretEnc); } catch { return; }
+    await this.patch({ webhookSecretEnc: encrypt(this.encryptionKey, plain, ROW) });
   }
 
   async clearRegistration(): Promise<void> {

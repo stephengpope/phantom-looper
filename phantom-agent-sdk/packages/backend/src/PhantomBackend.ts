@@ -293,6 +293,9 @@ export class PhantomBackend {
     const tokenLog = new TokenLog(database.drizzle);
     // The bot's own bookkeeping is the server's, whoever it is working for.
     const telegramBotState = new TelegramBotState(database.system, env.encryptionKey);
+    // One-time: blobs written before they were bound to their row (lib/crypto.ts).
+    await settings.bindRows();
+    await telegramBotState.bindRows();
     const telegramSentMessages = new TelegramSentMessages(database.system);
     const telegramHandledUpdates = new TelegramHandledUpdates(database.system);
     const sessionNotes = new SessionNotes();

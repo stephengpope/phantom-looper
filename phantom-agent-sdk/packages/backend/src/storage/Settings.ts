@@ -15,7 +15,7 @@ import { and, eq, inArray, isNotNull } from 'drizzle-orm';
 import type { Drizzle } from './Database.js';
 import { settings } from './schema.js';
 import { GLOBAL, LAYERS, scopeNames, type Layer, type OverridableLayer, type SettingScope } from '../lib/scopes.js';
-import { encrypt, decrypt } from '../lib/crypto.js';
+import { encrypt, decrypt, decryptUnbound } from '../lib/crypto.js';
 import { Clock } from '../lib/clock.js';
 import { logger } from '../lib/log.js';
 import type { SettingDefinition } from '../doors.js';
@@ -96,6 +96,9 @@ const secretMeta = (row: { key: string; scope: string; value: unknown }): Secret
 });
 const sortSecrets = (secrets: SecretMeta[]) => secrets.sort((a, b) =>
   (a.scope === b.scope ? a.name.localeCompare(b.name) : a.scope === GLOBAL ? -1 : a.scope.localeCompare(b.scope)));
+
+/** The name a row's blob is bound to (lib/crypto.ts): the three columns that make it one row. */
+const rowName = (namespace: string, scope: string, key: string) => `settings:${namespace}:${scope}:${key}`;
 
 export class Settings {
   readonly #definitions = new Map<string, SettingDefinition>();
@@ -256,7 +259,7 @@ export class Settings {
       let value: unknown;
       if (row.valueEnc) {
         if (!credentials) continue;
-        try { value = decrypt(this.encryptionKey, Buffer.from(row.valueEnc)); }
+        try { value = decrypt(this.encryptionKey, Buffer.from(row.valueEnc), rowName(GENERAL, row.scope, row.key)); }
         catch { log.warn({ scope: row.scope, key: row.key }, 'stored credential could not be decrypted — kept, not deleted'); continue; }
       } else value = row.value;
       out.get(row.scope)?.set(row.key, value);
@@ -266,7 +269,7 @@ export class Settings {
 
   private async writeRow(scopeName: string, key: string, value: unknown): Promise<void> {
     const row = this.isCredential(key)
-      ? { value: null, valueEnc: encrypt(this.encryptionKey, value as string) }
+      ? { value: null, valueEnc: encrypt(this.encryptionKey, value as string, rowName(GENERAL, scopeName, key)) }
       : { value: value as never, valueEnc: null };
     await this.database.insert(settings)
       .values({ scope: scopeName, namespace: GENERAL, key, ...row })
@@ -495,6 +498,27 @@ export class Settings {
     await this.database.delete(settings).where(eq(settings.scope, scopeName));
   }
 
+  /** Boot, once per install: every encrypted row written before blobs were
+   *  bound to their row (lib/crypto.ts) is decrypted the old way and written
+   *  back bound. A row that decrypts neither way is left as it is (reported
+   *  on read, as always). Remove once no install can be on a release before
+   *  v0.1.93. */
+  async bindRows(): Promise<void> {
+    const rows = await this.reader.select().from(settings).where(isNotNull(settings.valueEnc));
+    let bound = 0;
+    for (const row of rows) {
+      const blob = Buffer.from(row.valueEnc as Buffer);
+      const name = rowName(row.namespace, row.scope, row.key);
+      try { decrypt(this.encryptionKey, blob, name); continue; } catch { /* not bound yet, or unreadable */ }
+      let plain: string;
+      try { plain = decryptUnbound(this.encryptionKey, blob); } catch { continue; }
+      await this.database.update(settings).set({ valueEnc: encrypt(this.encryptionKey, plain, name) })
+        .where(and(eq(settings.scope, row.scope), eq(settings.namespace, row.namespace), eq(settings.key, row.key)));
+      bound += 1;
+    }
+    if (bound) log.info({ rows: bound }, 'encrypted rows bound to their row');
+  }
+
   // ── secrets — the `secret` namespace ──────────────────────────────────
   // One row per secret: token encrypted in value_enc, description in plain
   // value. Listing reads the plain column only and never decrypts.
@@ -521,7 +545,7 @@ export class Settings {
     for (const scopeName of [...scopeNames].reverse()) {
       const row = byScope.get(scopeName);
       if (!row) continue;
-      try { return decrypt(this.encryptionKey, Buffer.from(row.valueEnc as Buffer)); }
+      try { return decrypt(this.encryptionKey, Buffer.from(row.valueEnc as Buffer), rowName(SECRET_NS, scopeName, name)); }
       catch { log.warn({ scope: scopeName, name }, 'stored secret could not be decrypted — kept, not deleted'); return undefined; }
     }
     return undefined;
@@ -536,7 +560,7 @@ export class Settings {
       const kept = await this.database.update(settings).set({ value: { description }, updatedAt: new Date() }).where(where).returning({ key: settings.key });
       return kept.length > 0;
     }
-    const row = { value: { description } as never, valueEnc: encrypt(this.encryptionKey, value) };
+    const row = { value: { description } as never, valueEnc: encrypt(this.encryptionKey, value, rowName(SECRET_NS, scopeName, name)) };
     await this.database.insert(settings)
       .values({ scope: scopeName, namespace: SECRET_NS, key: name, ...row })
       .onConflictDoUpdate({ target: [settings.scope, settings.namespace, settings.key], set: { ...row, updatedAt: new Date() } });
