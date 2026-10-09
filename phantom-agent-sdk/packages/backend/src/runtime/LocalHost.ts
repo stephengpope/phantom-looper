@@ -223,7 +223,7 @@ export class LocalHost implements WorkspaceHost {
       diskGb: plan.diskGb,
       // Provenance on the container itself: which host made it, for which
       // workspace. The compose label groups them as one project in Docker
-      // Desktop (and `docker compose -p phantom-backend-workspaces ps`).
+      // Desktop (and `docker compose -p phantom-backend-sessions ps`).
       labels: { 'phantom.workspace': key, 'phantom.host': this.name, 'com.docker.compose.project': 'phantom-backend-sessions' },
     }) as never;
     let created: Docker.Container;
