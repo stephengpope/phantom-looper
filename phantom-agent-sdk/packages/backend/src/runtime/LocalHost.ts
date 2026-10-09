@@ -12,7 +12,7 @@ import type Docker from 'dockerode';
 import fs from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import path from 'node:path';
-import type { ContainerPlan, ContainerState, DetachEvent, FileKind, FileStat, Repo, WorkspaceFiles, WorkspaceHost } from './WorkspaceHost.js';
+import type { ContainerPlan, ContainerState, DetachEvent, FileType, FileStat, Repo, WorkspaceFiles, WorkspaceHost } from './WorkspaceHost.js';
 import { Sandbox, DockerExec } from './Sandbox.js';
 import { buildContainerSpec } from './SessionContainers.js';
 import type { Images } from './Images.js';
@@ -52,7 +52,7 @@ export interface LocalHostOptions {
   apiImage?: string;
 }
 
-const kindOf = (entry: { isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean }): FileKind =>
+const typeOf = (entry: { isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean }): FileType =>
   entry.isSymbolicLink() ? 'link' : entry.isDirectory() ? 'dir' : entry.isFile() ? 'file' : 'other';
 
 /** One workspace's directory on this filesystem, every path confined to it. */
@@ -91,13 +91,13 @@ class LocalFiles implements WorkspaceFiles {
   async stat(rel: string): Promise<FileStat | null> {
     try {
       const stat = await fs.lstat(this.at(rel));
-      return { size: stat.size, mtimeMs: stat.mtimeMs, kind: kindOf(stat) };
+      return { size: stat.size, mtimeMs: stat.mtimeMs, type: typeOf(stat) };
     } catch (error) { if ((error as { code?: string }).code === 'ENOENT') return null; throw error; }
   }
-  async list(rel: string): Promise<Array<{ name: string; kind: FileKind }> | null> {
+  async list(rel: string): Promise<Array<{ name: string; type: FileType }> | null> {
     try {
       const entries = await fs.readdir(this.at(rel), { withFileTypes: true });
-      return entries.map((entry) => ({ name: entry.name, kind: kindOf(entry) }));
+      return entries.map((entry) => ({ name: entry.name, type: typeOf(entry) }));
     } catch (error) { if ((error as { code?: string }).code === 'ENOENT') return null; throw error; }
   }
   async mkdir(rel: string): Promise<void> { await fs.mkdir(this.at(rel), { recursive: true }); }

@@ -28,7 +28,7 @@ test('offline: a job waits, goes down on attach, answers on deliver', async () =
   host.attach('boot-1', writer);
   assert.equal(host.online, true);
   assert.equal(sent.length, 1);
-  assert.equal(sent[0].kind, 'containerState');
+  assert.equal(sent[0].type, 'containerState');
   host.deliver([{ job: sent[0].id, type: 'result', value: 'running' }]);
   assert.equal(await answer, 'running');
 });
@@ -74,20 +74,20 @@ test('a stream yields chunks in order and ends; stopping early cancels the job',
   const first = stream.next();
   await tick();
   const job = sent[0];
-  assert.equal(job.kind, 'execStream');
+  assert.equal(job.type, 'execStream');
   host.deliver([{ job: job.id, type: 'chunk', value: { seq: 0, data: 'a' } }, { job: job.id, type: 'chunk', value: { seq: 1, data: 'b' } }]);
   records.push((await first).value);
   records.push((await stream.next()).value);
   assert.deepEqual(records, [{ seq: 0, data: 'a' }, { seq: 1, data: 'b' }]);
   await stream.return(undefined);                      // the consumer stops
-  assert.equal(sent.at(-1)!.kind, 'cancel');
+  assert.equal(sent.at(-1)!.type, 'cancel');
   assert.equal((sent.at(-1) as { job?: string }).job, job.id);
 
   // A stream that ends on its own: end closes it.
   const whole = host.sandbox('ws1').runStream(['sh']);
   const p = whole.next();
   await tick();
-  const job2 = sent.find((one) => one.kind === 'execStream' && one.id !== job.id)!;
+  const job2 = sent.find((one) => one.type === 'execStream' && one.id !== job.id)!;
   host.deliver([{ job: job2.id, type: 'chunk', value: { seq: 0, event: 'exit', code: 0 } }, { job: job2.id, type: 'end' }]);
   assert.deepEqual((await p).value, { seq: 0, event: 'exit', code: 0 });
   assert.equal((await whole.next()).done, true);
@@ -99,15 +99,15 @@ test('a watch is a standing order: re-sent on attach, its chunks fire the callba
   host.watch('ws1', () => { changes++; });
   assert.equal(sent.length, 0);                       // offline: held
   host.attach('boot-1', writer);
-  assert.equal(sent.filter((job) => job.kind === 'watch').length, 1);
-  const watch = sent.find((job) => job.kind === 'watch')!;
+  assert.equal(sent.filter((job) => job.type === 'watch').length, 1);
+  const watch = sent.find((job) => job.type === 'watch')!;
   host.deliver([{ job: watch.id, type: 'chunk', value: { changed: true } }]);
   assert.equal(changes, 1);
   host.unlink(writer);
   host.attach('boot-1', writer);
-  assert.equal(sent.filter((job) => job.kind === 'watch').length, 2);   // re-sent whole
+  assert.equal(sent.filter((job) => job.type === 'watch').length, 2);   // re-sent whole
   host.unwatch('ws1');
-  assert.equal(sent.at(-1)!.kind, 'unwatch');
+  assert.equal(sent.at(-1)!.type, 'unwatch');
 });
 
 test('activeWorkspaces reads as none while offline — never a wait', async () => {

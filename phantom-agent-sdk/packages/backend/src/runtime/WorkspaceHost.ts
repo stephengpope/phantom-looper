@@ -30,8 +30,8 @@ export interface Repo {
   exists(rel: string): Promise<boolean>;
 }
 
-export type FileKind = 'file' | 'dir' | 'link' | 'other';
-export interface FileStat { size: number; mtimeMs: number; kind: FileKind }
+export type FileType = 'file' | 'dir' | 'link' | 'other';
+export interface FileStat { size: number; mtimeMs: number; type: FileType }
 
 /** One workspace's directory, by relative path. `read`, `stat` and `list`
  *  answer null for a path that is not there; `write` makes the parents. */
@@ -41,7 +41,7 @@ export interface WorkspaceFiles {
   /** The last `bytes` of a file (a log's tail); empty when absent. */
   tail(rel: string, bytes: number): Promise<Buffer>;
   stat(rel: string): Promise<FileStat | null>;
-  list(rel: string): Promise<Array<{ name: string; kind: FileKind }> | null>;
+  list(rel: string): Promise<Array<{ name: string; type: FileType }> | null>;
   mkdir(rel: string): Promise<void>;
   rm(rel: string): Promise<void>;
   /** The real path of `rel` when it resolves to a regular file INSIDE the

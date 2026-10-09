@@ -13,34 +13,34 @@ import type { GitAuth } from '../git/Git.js';
 import type { RunOpts } from '../runtime/Sandbox.js';
 
 export type Job = { id: string } & (
-  | { kind: 'checkout'; workspaceId: string; projectId: string; branch: string; auth: GitAuth }
-  | { kind: 'removeFiles'; workspaceId: string }
-  | { kind: 'git'; workspaceId: string; args: string[]; auth?: GitAuth }
-  | { kind: 'exists'; workspaceId: string; rel: string }
-  | { kind: 'read'; workspaceId: string; rel: string }
-  | { kind: 'write'; workspaceId: string; rel: string; data: string }
-  | { kind: 'tail'; workspaceId: string; rel: string; bytes: number }
-  | { kind: 'stat'; workspaceId: string; rel: string }
-  | { kind: 'list'; workspaceId: string; rel: string }
-  | { kind: 'mkdir'; workspaceId: string; rel: string }
-  | { kind: 'rm'; workspaceId: string; rel: string }
-  | { kind: 'realFile'; workspaceId: string; rel: string }
-  | { kind: 'containerUp'; workspaceId: string; plan: ContainerPlan }
-  | { kind: 'containerRemove'; workspaceId: string }
-  | { kind: 'containerState'; workspaceId: string }
-  | { kind: 'activeWorkspaces' }
-  | { kind: 'exec'; workspaceId: string; argv: string[]; cwd?: string; stdin?: string; maxBytes?: number; timeoutMs?: number }
-  | { kind: 'execStream'; workspaceId: string; argv: string[]; cwd?: string; timeoutMs?: number }
-  | { kind: 'detach'; workspaceId: string; taskId: string; argv: string[]; cwd?: string; sidfile: string }
-  | { kind: 'watch'; workspaceId: string }
-  | { kind: 'unwatch'; workspaceId: string }
-  | { kind: 'cancel'; job: string }
-  | { kind: 'disk' }
-  | { kind: 'diskSupport' }
+  | { type: 'checkout'; workspaceId: string; projectId: string; branch: string; auth: GitAuth }
+  | { type: 'removeFiles'; workspaceId: string }
+  | { type: 'git'; workspaceId: string; args: string[]; auth?: GitAuth }
+  | { type: 'exists'; workspaceId: string; rel: string }
+  | { type: 'read'; workspaceId: string; rel: string }
+  | { type: 'write'; workspaceId: string; rel: string; data: string }
+  | { type: 'tail'; workspaceId: string; rel: string; bytes: number }
+  | { type: 'stat'; workspaceId: string; rel: string }
+  | { type: 'list'; workspaceId: string; rel: string }
+  | { type: 'mkdir'; workspaceId: string; rel: string }
+  | { type: 'rm'; workspaceId: string; rel: string }
+  | { type: 'realFile'; workspaceId: string; rel: string }
+  | { type: 'containerUp'; workspaceId: string; plan: ContainerPlan }
+  | { type: 'containerRemove'; workspaceId: string }
+  | { type: 'containerState'; workspaceId: string }
+  | { type: 'activeWorkspaces' }
+  | { type: 'exec'; workspaceId: string; argv: string[]; cwd?: string; stdin?: string; maxBytes?: number; timeoutMs?: number }
+  | { type: 'execStream'; workspaceId: string; argv: string[]; cwd?: string; timeoutMs?: number }
+  | { type: 'detach'; workspaceId: string; taskId: string; argv: string[]; cwd?: string; sidfile: string }
+  | { type: 'watch'; workspaceId: string }
+  | { type: 'unwatch'; workspaceId: string }
+  | { type: 'cancel'; job: string }
+  | { type: 'disk' }
+  | { type: 'diskSupport' }
 );
 
-export type JobKind = Job['kind'];
-/** A job without its id — per kind, not the union's common fields. */
+export type JobType = Job['type'];
+/** A job without its id — per type, not the union's common fields. */
 export type JobBody = Job extends infer J ? J extends { id: string } ? Omit<J, 'id'> : never : never;
 
 /** What a host sends up about a job. `error` carries git's own fields

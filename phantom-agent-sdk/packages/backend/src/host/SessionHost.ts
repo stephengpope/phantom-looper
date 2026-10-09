@@ -80,7 +80,7 @@ export class SessionHost {
     });
   }
 
-  /** Which kind of key this is, proven against the backend. */
+  /** Which key this is — the root API key or a user's — proven against the backend. */
   async #resolveCredential(): Promise<void> {
     try { await this.#backend.call('GET', '/identity/me'); return; }
     catch (error) {
@@ -183,20 +183,20 @@ export class SessionHost {
 
   #onJob(job: Job): void {
     if (!job || typeof job.id !== 'string') return;
-    if (job.kind === 'cancel') { this.#running.get(job.job)?.cancel?.(); return; }
-    if (job.kind === 'unwatch') { this.#local.unwatch(job.workspaceId); return; }
+    if (job.type === 'cancel') { this.#running.get(job.job)?.cancel?.(); return; }
+    if (job.type === 'unwatch') { this.#local.unwatch(job.workspaceId); return; }
     if (this.#running.has(job.id) || this.#doneSet.has(job.id)) return;
     const entry: { cancel?: () => void } = {};
     this.#running.set(job.id, entry);
     void this.#run(job, entry)
-      .catch((error) => { log.warn({ job: job.id, kind: job.kind, err: errStr(error) }, 'job failed'); this.#report({ job: job.id, type: 'error', ...encodeError(error) }); })
+      .catch((error) => { log.warn({ job: job.id, type: job.type, err: errStr(error) }, 'job failed'); this.#report({ job: job.id, type: 'error', ...encodeError(error) }); })
       .finally(() => this.#finish(job.id));
   }
 
   async #run(job: Job, entry: { cancel?: () => void }): Promise<void> {
     const local = this.#local;
     const result = (value: unknown) => this.#report({ job: job.id, type: 'result', value });
-    switch (job.kind) {
+    switch (job.type) {
       case 'checkout': return result(await local.checkout(job.workspaceId, job.projectId, job.branch, job.auth));
       case 'removeFiles': await local.removeFiles(job.workspaceId); return result(null);
       case 'git': return result(await local.repo(job.workspaceId).git(job.args, job.auth));
@@ -230,7 +230,7 @@ export class SessionHost {
         this.#running.delete(job.id);
         return;
       }
-      default: throw new Error(`unknown job kind ${(job as { kind: string }).kind}`);
+      default: throw new Error(`unknown job type ${(job as { type: string }).type}`);
     }
   }
 

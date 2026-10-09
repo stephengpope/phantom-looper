@@ -49,7 +49,7 @@ async function bundledFiles(files: WorkspaceFiles, dir: string): Promise<string[
     const entries = (await files.list(dir).catch(() => null)) ?? [];
     for (const entry of entries) {
       const relativePath = rel ? `${rel}/${entry.name}` : entry.name;
-      if (entry.kind === 'dir') await walk(`${dir}/${entry.name}`, relativePath);
+      if (entry.type === 'dir') await walk(`${dir}/${entry.name}`, relativePath);
       else if (relativePath !== 'SKILL.md') out.push(relativePath);
     }
   };

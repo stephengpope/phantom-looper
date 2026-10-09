@@ -12,7 +12,7 @@
 // first (the syncs, the sweeps). A person's tool call waits, and the person
 // sees why on the feed.
 import { newId } from '@phantom-agent-sdk/client';
-import type { ContainerPlan, ContainerState, DetachEvent, FileKind, FileStat, Repo, WorkspaceFiles, WorkspaceHost } from './WorkspaceHost.js';
+import type { ContainerPlan, ContainerState, DetachEvent, FileType, FileStat, Repo, WorkspaceFiles, WorkspaceHost } from './WorkspaceHost.js';
 import { Sandbox, type Exec, type RunOpts, type RunResult, type StreamRecord } from './Sandbox.js';
 import type { GitAuth } from '../git/Git.js';
 import { type Job, type JobBody, type JobEvent, decodeError, encodeRunOpts, fromBase64, toBase64 } from '../host/protocol.js';
@@ -125,7 +125,7 @@ export class RemoteHost implements WorkspaceHost {
     } finally {
       if (!state.done) {
         this.#pending.delete(id);
-        this.#send({ id: newId(), kind: 'cancel', job: id });
+        this.#send({ id: newId(), type: 'cancel', job: id });
       }
       void finished;
     }
@@ -134,59 +134,59 @@ export class RemoteHost implements WorkspaceHost {
   // ── the checkout ──────────────────────────────────────────────────────
 
   checkout(workspaceId: string, projectId: string, branch: string, auth: GitAuth): Promise<'claimed' | 'cloned'> {
-    return this.#call({ kind: 'checkout', workspaceId, projectId, branch, auth });
+    return this.#call({ type: 'checkout', workspaceId, projectId, branch, auth });
   }
-  removeFiles(workspaceId: string): Promise<void> { return this.#call({ kind: 'removeFiles', workspaceId }); }
+  removeFiles(workspaceId: string): Promise<void> { return this.#call({ type: 'removeFiles', workspaceId }); }
 
   repo(workspaceId: string): Repo {
     return {
-      git: (args, auth) => this.#call({ kind: 'git', workspaceId, args, ...(auth ? { auth } : {}) }),
-      exists: (rel) => this.#call({ kind: 'exists', workspaceId, rel }),
+      git: (args, auth) => this.#call({ type: 'git', workspaceId, args, ...(auth ? { auth } : {}) }),
+      exists: (rel) => this.#call({ type: 'exists', workspaceId, rel }),
     };
   }
 
   files(workspaceId: string): WorkspaceFiles {
     const call = <T>(job: JobBody) => this.#call<T>(job);
     return {
-      read: async (rel) => { const got = await call<string | null>({ kind: 'read', workspaceId, rel }); return got === null ? null : fromBase64(got); },
-      write: (rel, data) => call({ kind: 'write', workspaceId, rel, data: toBase64(data) }),
-      tail: async (rel, bytes) => fromBase64(await call<string>({ kind: 'tail', workspaceId, rel, bytes })),
-      stat: (rel) => call<FileStat | null>({ kind: 'stat', workspaceId, rel }),
-      list: (rel) => call<Array<{ name: string; kind: FileKind }> | null>({ kind: 'list', workspaceId, rel }),
-      mkdir: (rel) => call({ kind: 'mkdir', workspaceId, rel }),
-      rm: (rel) => call({ kind: 'rm', workspaceId, rel }),
-      realFile: (rel) => call<string | null>({ kind: 'realFile', workspaceId, rel }),
+      read: async (rel) => { const got = await call<string | null>({ type: 'read', workspaceId, rel }); return got === null ? null : fromBase64(got); },
+      write: (rel, data) => call({ type: 'write', workspaceId, rel, data: toBase64(data) }),
+      tail: async (rel, bytes) => fromBase64(await call<string>({ type: 'tail', workspaceId, rel, bytes })),
+      stat: (rel) => call<FileStat | null>({ type: 'stat', workspaceId, rel }),
+      list: (rel) => call<Array<{ name: string; type: FileType }> | null>({ type: 'list', workspaceId, rel }),
+      mkdir: (rel) => call({ type: 'mkdir', workspaceId, rel }),
+      rm: (rel) => call({ type: 'rm', workspaceId, rel }),
+      realFile: (rel) => call<string | null>({ type: 'realFile', workspaceId, rel }),
     };
   }
 
   // ── the container ─────────────────────────────────────────────────────
 
   containerUp(workspaceId: string, plan: ContainerPlan): Promise<{ created: boolean }> {
-    return this.#call({ kind: 'containerUp', workspaceId, plan });
+    return this.#call({ type: 'containerUp', workspaceId, plan });
   }
-  containerRemove(workspaceId: string): Promise<void> { return this.#call({ kind: 'containerRemove', workspaceId }); }
-  containerState(workspaceId: string): Promise<ContainerState> { return this.#call({ kind: 'containerState', workspaceId }); }
+  containerRemove(workspaceId: string): Promise<void> { return this.#call({ type: 'containerRemove', workspaceId }); }
+  containerState(workspaceId: string): Promise<ContainerState> { return this.#call({ type: 'containerState', workspaceId }); }
 
   /** Unknown while offline reads as none: the reaper and the refresh skip
    *  what they cannot see, and ask again next tick. */
   activeWorkspaces(): Promise<string[]> {
     if (!this.online) return Promise.resolve([]);
-    return this.#call({ kind: 'activeWorkspaces' });
+    return this.#call({ type: 'activeWorkspaces' });
   }
 
   sandbox(workspaceId: string): Sandbox { return new Sandbox(new RemoteExec(this, workspaceId)); }
 
   detach(workspaceId: string, taskId: string, argv: string[], cwd: string | undefined, sidfile: string): AsyncIterable<DetachEvent> {
-    return this.#stream<DetachEvent>({ kind: 'detach', workspaceId, taskId, argv, ...(cwd !== undefined ? { cwd } : {}), sidfile });
+    return this.#stream<DetachEvent>({ type: 'detach', workspaceId, taskId, argv, ...(cwd !== undefined ? { cwd } : {}), sidfile });
   }
 
   /** The exec primitives, for RemoteExec. */
   exec(workspaceId: string, argv: string[], opts: RunOpts): Promise<RunResult> {
-    return this.#call<{ stdout: string; stderr: string; exitCode: number }>({ kind: 'exec', workspaceId, argv, ...encodeRunOpts(opts) })
+    return this.#call<{ stdout: string; stderr: string; exitCode: number }>({ type: 'exec', workspaceId, argv, ...encodeRunOpts(opts) })
       .then((ran) => ({ stdout: fromBase64(ran.stdout), stderr: fromBase64(ran.stderr), exitCode: ran.exitCode }));
   }
   execStream(workspaceId: string, argv: string[], opts: { cwd?: string; timeoutMs?: number }): AsyncGenerator<StreamRecord> {
-    return this.#stream<StreamRecord>({ kind: 'execStream', workspaceId, argv, ...opts });
+    return this.#stream<StreamRecord>({ type: 'execStream', workspaceId, argv, ...opts });
   }
 
   // ── the watcher ───────────────────────────────────────────────────────
@@ -194,19 +194,19 @@ export class RemoteHost implements WorkspaceHost {
   watch(workspaceId: string, onChange: () => void): void {
     const known = this.#watches.get(workspaceId);
     if (known) { known.onChange = onChange; return; }
-    const job: Job = { id: newId(), kind: 'watch', workspaceId };
+    const job: Job = { id: newId(), type: 'watch', workspaceId };
     this.#watches.set(workspaceId, { job, onChange });
     this.#send(job);
   }
   unwatch(workspaceId: string): void {
     if (!this.#watches.delete(workspaceId)) return;
-    this.#send({ id: newId(), kind: 'unwatch', workspaceId });
+    this.#send({ id: newId(), type: 'unwatch', workspaceId });
   }
 
   // ── the box ───────────────────────────────────────────────────────────
 
-  disk(): Promise<{ usedPct: number; freeGB: number }> { return this.#call({ kind: 'disk' }); }
-  diskSupport(): Promise<string | null> { return this.#call({ kind: 'diskSupport' }); }
+  disk(): Promise<{ usedPct: number; freeGB: number }> { return this.#call({ type: 'disk' }); }
+  diskSupport(): Promise<string | null> { return this.#call({ type: 'diskSupport' }); }
 }
 
 /** Exec over jobs — the Sandbox's rules hold unchanged on top. */

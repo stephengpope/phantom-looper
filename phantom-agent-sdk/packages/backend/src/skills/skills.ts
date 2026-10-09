@@ -97,7 +97,7 @@ export async function scanSkillsIn(files: WorkspaceFiles, base = 'repo'): Promis
   if (entries === null) return [];
   const out: SkillMeta[] = [];
   for (const entry of entries) {
-    if (entry.kind !== 'dir' && entry.kind !== 'link') continue;
+    if (entry.type !== 'dir' && entry.type !== 'link') continue;
     const markdown = await files.read(`${dir}/${entry.name}/SKILL.md`).catch(() => null);
     if (markdown === null) continue;
     const description = parseDescription(markdown.toString('utf8'));

@@ -97,6 +97,25 @@ The DRIVER (the cli running the turn) is a separate matter and needs no
 move: the turn's state is the transcript; interrupt the turn anywhere, resume
 the session from another machine, send the next message.
 
+## Words
+
+One word per thing, the same in code, routes, docs and what people read:
+
+| word | meaning |
+|---|---|
+| session host | a box that runs workspaces for the backend; `session_hosts`, `SessionHosts`, `/api/session-hosts` |
+| user host | a session host registered with a user's API key; only their workspaces |
+| shared host | a session host registered with the root API key; anyone's workspaces |
+| root API key | `API_KEY` in `.env`; the backend's own credential |
+| workspace | a checkout and its container; `phantom-backend-workspace-<id>` |
+| job | one instruction from the backend to a host, `{ id, type, ... }` |
+| feed | the long GET a host (or a cli) holds open; records come down it |
+| relay | the POST a host (or a cli) sends records up on |
+| link | one feed plus one relay: the persistent connection (`Link`) |
+| move | a workspace re-placed on another host; `POST /api/sessions/:id/move` |
+
+Discriminant fields are `type` (as everywhere in the code); feed records use `event`.
+
 ## Names
 
 | | |

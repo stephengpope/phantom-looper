@@ -12,8 +12,8 @@ export async function copyScratch(from: WorkspaceHost, fromId: string, to: Works
     if (!entries) return;
     for (const entry of entries) {
       const path = `${rel}/${entry.name}`;
-      if (entry.kind === 'dir') { await target.mkdir(path); await walk(path); }
-      else if (entry.kind === 'file') { const data = await source.read(path); if (data) await target.write(path, data); }
+      if (entry.type === 'dir') { await target.mkdir(path); await walk(path); }
+      else if (entry.type === 'file') { const data = await source.read(path); if (data) await target.write(path, data); }
     }
   };
   await target.mkdir('scratch');
