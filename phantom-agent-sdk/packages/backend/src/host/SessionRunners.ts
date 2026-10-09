@@ -138,7 +138,7 @@ export class SessionRunners {
   // ── placement ─────────────────────────────────────────────────────────
 
   /** Where a new workspace of `project` for `userId` goes (docs/
-   *  host-load-placement.md). The tiers, in order: the user's own online
+   *  multi-host-arch.md, Placement). The tiers, in order: the user's own online
    *  hosts; shared online hosts; the backend host. Within a tier: a host
    *  that cannot take a checkout — its disk under the sweep's floor, or it
    *  cannot hold the project's disk limit — is not a candidate; the lowest

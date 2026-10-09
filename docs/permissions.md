@@ -1,8 +1,52 @@
 # Permissions: organizations and users, top to bottom
 
-Built 2026-10-07 (SDK migration 059). This supersedes `multi-user.md` where
-the two differ: the SDK's own `/api` routes now take users, and the
-row-level policies are the one rule.
+Built 2026-10-05–07 (SDK migrations 055–061). All of it is the SDK's; an app
+turns sign-in on. phantom-looper turns it on when `AUTH_SECRET` is set and
+uses none of it yet.
+
+## Where things live
+
+```
+Postgres server
+├── database phantom
+│   ├── schema phantom_agent_sdk   the SDK's tables (+ its migration ledger)
+│   ├── schema identity            Better Auth's: user, session, account, verification,
+│   │                              organization, member, invitation, apikey
+│   ├── schema <app>               user space's tables (phantom_looper)
+│   └── schema public              empty
+└── databases project_<id>         agent play spaces: separate, no joins
+```
+
+| Prefix | Owned by | Auth |
+|---|---|---|
+| `/api/*` | SDK | the service role key, a user role key or a sign-in token; a route flagged `serviceRole` refuses a user |
+| `/api/auth/*` | SDK (Better Auth) | public / the user's own token: sign in, organizations, invitations, keys |
+| `/api/identity/*` | SDK | `me`: any caller · the rest: the service role's bootstrap |
+| `/app/*` | user space | the same credentials, identified and not refused; the route decides with `backend.identity.require` |
+| `/db`, `/docs` | SDK (console) | Basic: `service_role` + the service role key |
+
+## Sign-in and mail
+
+- **Better Auth** (`identity/Identity.ts`, the one owner): plugins
+  `organization` (every user gets a personal organization), `magicLink`
+  (invite-only: a stranger's email gets 200 and no mail), `bearer`, `admin`,
+  `apiKey`. Password sign-in and GitHub/Google are options
+  (`IdentityOptions.signIn`); "set a password" is the reset flow, and
+  completing it verifies the address.
+- **Config door** `PhantomBackendConfig.identity: { secret, trustedOrigins,
+  signIn?, mail? }`. Absent: no `/api/auth` route, nothing written. `mail`
+  is four templates (magic link, invitation, password reset, verification);
+  absent, the SDK's plain wording.
+- **Bootstrap:** the service role makes the first user with
+  `POST /api/identity/users {email, name}` and gets their link from
+  `POST /api/identity/magic-link {email}`, handed back, not mailed.
+- **Mail** is nodemailer over SMTP (`backend.mailer`): settings `smtp_host`,
+  `smtp_port`, `smtp_secure`, `smtp_user`, `smtp_password`, `smtp_from`, read
+  on every send; `POST /api/mail/test {to}` proves it.
+- **Client SDK:** `new BackendClient({ url, credential })` with
+  `{ serviceRoleKey } | { sessionToken } | { userRoleKey }`;
+  `backend.identity.me()`, `.verify(token)`, and Better Auth's own client at
+  `backend.identity.auth`.
 
 ## The rule
 
@@ -298,11 +342,3 @@ same way an API call does.
   their owner, managing links, and per-chat state. Migrations were checked
   on a copy of the real local data, which moved the state row to the
   service role's chat with its session and project, and on a fresh install.
-
-## Not yet
-
-- Telegram topics (one group, a topic per project): groups work today.
-- Docker for agents on a shared server needs a safe runtime (Sysbox,
-  rootless) before `container_docker` can be offered to organizations.
-- gVisor is a setting away (`container_runtime: runsc`), but it is not
-  installed or proven on a server yet.

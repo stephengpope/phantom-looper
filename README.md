@@ -170,6 +170,5 @@ phantom-agent-sdk/packages/backend   the backend an app configures (PhantomBacke
 phantom-backend/               this app's backend: the looper, the cron scheduler, the Telegram bot, its config
 phantom-cli/                   this app's terminal client
 phantom-looper/                this app's agents and prompts, shared by the cli and the backend
-docs/v1-plan.md                what is left to v1
-docs/multi-user.md             mail, sign-in, ownership, invites — designed, not started
+docs/compaction.md             the one open item
 ```

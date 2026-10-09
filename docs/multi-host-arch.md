@@ -51,8 +51,12 @@ Once, when a workspace is created (`Workspaces.checkout`); pinned from then on
 2. shared online hosts
 3. the backend itself (unless `RUN_SESSION_CONTAINERS=0`)
 
-Within a tier: fewest workspaces with files, then most recently connected. A
-host whose box cannot hold the project's `container_disk_gb` is skipped.
+Within a tier, disk is a filter and CPU is the order: a host under the disk
+sweep's floor (`MIN_FREE_GB`), over `disk_cleanup_percent`, or unable to hold
+the project's `container_disk_gb` is not a candidate; the lowest `cpu` on the
+last heartbeat wins; equal, one at random. A host not yet heard from reads as
+idle. The load average is a one-minute average, so a burst can land on one
+box; the next beat corrects it.
 
 ## The link
 
@@ -175,7 +179,23 @@ newer protocol. `phantom-cli update` does both in that order.
 Two things stay with the backend's own Docker: the shared agent database
 (`agent_database_shared` needs the database container on the same daemon —
 a workspace on a session runner gets none) and the system skills read off the
-workspace image. Maintenance reaches every online runner on the API's timer
-(docs/host-maintenance.md): the warm-checkout tick and the disk sweep run
-once per box, each box measured itself, pruning its own images and giving up
-only the workspaces placed on it.
+workspace image.
+
+## Maintenance
+
+The timer stays on the API; the work runs on the box that holds the volume,
+as a job down its feed. Every maintenance tick, each online runner gets:
+
+- `poolTick { projects }` — the warm-checkout tick (`CheckoutPool.tick`)
+  against its own volume: evict, refresh, restock one per project. A runner
+  is stocked only for projects that have had a workspace on it (the job
+  carries the project's git token). A tick landing under a running one is
+  dropped; the API does not await it.
+- the disk sweep (`Disk.pressureSweep`), once per box: measured with a
+  `disk` job, pruned with `removeOldImages { keep }` (never an image a
+  container uses), and giving up only the workspaces placed on it. The
+  decisions — idle, busy, landed, backed up — are the API's; no credential
+  leaves it for this half. The API's own disk is swept whether or not it
+  runs containers: every update pulls an image there.
+
+Offline runners are skipped by both.

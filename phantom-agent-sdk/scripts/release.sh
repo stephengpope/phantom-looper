@@ -4,7 +4,7 @@
 # and src/sdkVersion.ts — proves they agree (assert-sdk-version.mjs), then
 # commits and tags `sdk-vX.Y.Z`. Publishing is the one step after it:
 #   npm publish -w @phantom-agent-sdk/client && npm publish -w @phantom-agent-sdk/backend
-# (needs the npm org; see docs/v1-plan.md §6). Run from anywhere in the repo.
+# (needs the npm org). Run from anywhere in the repo.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

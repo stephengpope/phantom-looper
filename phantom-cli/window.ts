@@ -1882,7 +1882,7 @@ export class WindowStore {
       }
       case 'compact':
         // Compaction is the backend's, on the record — not built yet
-        // (docs/v1-plan.md §4).
+        // (docs/compaction.md).
         if (args.trim().toLowerCase() === 'assistant') {
             this.note('compaction is not available for the Assistant yet');
           return;

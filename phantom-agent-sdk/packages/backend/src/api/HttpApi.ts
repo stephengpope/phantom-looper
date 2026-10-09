@@ -1,6 +1,6 @@
 // HttpApi — the HTTP surface: Fastify, the envelope ({ok, data} /
 // {ok:false, error:{code, message, retryable}}), and three prefixes that say
-// who owns a route and who may call it (docs/multi-user.md):
+// who owns a route and who may call it (docs/permissions.md):
 //
 //   /api/*       the SDK's routes: the service role key, or a user (sign-in
 //                token or user API key)

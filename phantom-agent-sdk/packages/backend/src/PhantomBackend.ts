@@ -127,7 +127,7 @@ export interface PhantomBackendConfig {
   onStop?: (backend: PhantomBackend) => Promise<void>;
   /** Write a session's title from the selected user messages — a model
    *  call, the app's until the backend makes it on the client SDK's billed
-   *  model (docs/v1-plan.md). The cadence, the selection and
+   *  model. The cadence, the selection and
    *  the write-back are the SDK's (SessionTitler). */
   writeTitle?: TitleWriter;
   /** The Telegram command menu the bot registers: the global default and

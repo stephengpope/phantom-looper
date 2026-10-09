@@ -105,8 +105,6 @@ would otherwise trigger itself. Anything else that changes fires, and
 
 - While a rebase is stopped in the checkout, no sync runs on it — instant
   or manual. Staging marker files would commit them as resolved.
-- A container that dies on its own (not removed) keeps its watcher until a
-  tool call recreates it; cost, one fetch per beat.
 
 ## What NOT to do
 
