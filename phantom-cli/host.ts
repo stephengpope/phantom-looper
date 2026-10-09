@@ -104,11 +104,12 @@ export async function runHost(args: string[]): Promise<number> {
   if (command === 'status') {
     compose(['ps']);
     try {
-      const listed = await apiFor(url, key, savedCaFor(url))('GET', '/session-hosts') as { hosts: Array<{ id: string; name: string; online: boolean; ownerUserId: string | null; workspaces: number; connectedAt: string | null }> };
+      const listed = await apiFor(url, key, savedCaFor(url))('GET', '/session-hosts') as { hosts: Array<{ id: string; name: string; online: boolean; ownerUserId: string | null; workspaces: number; connectedAt: string | null; load: { cpu: number; freeGB: number; usedPct: number; running: number } | null }> };
       if (!listed.hosts.length) { console.log('the backend knows no session hosts'); return 0; }
       console.log('\nthe backend sees:');
       for (const host of listed.hosts) {
-        console.log(`  ${host.online ? '●' : '○'} ${host.name}  ${host.ownerUserId ? 'user host' : 'shared host'}  ${host.workspaces} workspace${host.workspaces === 1 ? '' : 's'}  ${host.online ? 'online' : `offline${host.connectedAt ? ` (last ${host.connectedAt})` : ''}`}  ${host.id}`);
+        const load = host.load ? `  cpu ${host.load.cpu.toFixed(2)}  ${host.load.running} running  ${Math.round(host.load.freeGB)} GB free` : '';
+        console.log(`  ${host.online ? '●' : '○'} ${host.name}  ${host.ownerUserId ? 'user host' : 'shared host'}  ${host.workspaces} workspace${host.workspaces === 1 ? '' : 's'}${load}  ${host.online ? 'online' : `offline${host.connectedAt ? ` (last ${host.connectedAt})` : ''}`}  ${host.id}`);
       }
     } catch (error) { console.error(`could not ask the backend: ${(error as Error).message}`); return 1; }
     return 0;
