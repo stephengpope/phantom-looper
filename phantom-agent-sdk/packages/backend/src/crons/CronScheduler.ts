@@ -15,8 +15,9 @@
 //
 // A fire opens a NEW coding session in the project (its own checkout,
 // named after the cron, opened by the cron actor), runs the prompt as one
-// coding turn on the client SDK — the same agent a cli window runs — and
-// closes it. A cron that names its model stamps it on that session's row
+// coding turn — on a session runner that drives this agent when one is
+// online (backend.turns.place), else here on the client SDK, the same agent
+// a cli window runs — and closes it. A cron that names its model stamps it on that session's row
 // first (Sessions.stampModel), so the run reads the row like every runner
 // and the record shows what ran; its reasoning rides the pin. A SCRIPT cron
 // runs `sh <path>` instead, through the same bash
@@ -212,16 +213,32 @@ export class CronScheduler {
       await born.close();
       await sessions.nameIfUnnamed(sessionId, row.name);
       if (row.provider && row.model) await sessions.stampModel(sessionId, { provider: row.provider, model: row.model, reasoning: row.reasoning });
-      agent = await this.agent.resumeSession(client, handlers, sessionId);
-      this.agents.set(sessionId, agent);
       if (row.script) {
+        agent = await this.agent.resumeSession(client, handlers, sessionId);
+        this.agents.set(sessionId, agent);
         const exit = await this.runScript(client, agent, row.script);
         log.info({ project: project.name, cron: row.name, session: sessionId, script: row.script, exit }, 'cron script finished');
-      } else {
-        const result = await agent.sendMessage(row.prompt ?? '');
-        log.info({ project: project.name, cron: row.name, session: sessionId,
-          tokens: result ? result.usage.input + result.usage.output : 0, interrupted: result?.outcome === 'interrupted' }, 'cron run finished');
+        return;
       }
+      // The turn goes to a session runner that drives this agent, as a
+      // workspace goes to one (host/Turns.ts): the hold taken for it, the
+      // prompt its opening. No runner online for it: this process drives the
+      // turn itself, as it always has.
+      const session = (await sessions.get(sessionId))!;
+      const placed = await this.backend.turns.place(session, project, { agentType: born.type, opening: [row.prompt ?? ''], actor: CRON_STARTER,
+        actingFor: { organizationId: project.organizationId, ...(row.user_id ? { userId: row.user_id } : {}) } });
+      if (placed === 'locked') { log.warn({ cron: row.name, session: sessionId }, 'cron session held elsewhere — run skipped'); return; }
+      if (placed !== 'no_runner') {
+        const result = await placed.result;
+        log.info({ project: project.name, cron: row.name, session: sessionId, runner: placed.runner.name,
+          tokens: result.usage.input + result.usage.output, outcome: result.outcome }, 'cron run finished');
+        return;
+      }
+      agent = await this.agent.resumeSession(client, handlers, sessionId);
+      this.agents.set(sessionId, agent);
+      const result = await agent.sendMessage(row.prompt ?? '');
+      log.info({ project: project.name, cron: row.name, session: sessionId,
+        tokens: result ? result.usage.input + result.usage.output : 0, interrupted: result?.outcome === 'interrupted' }, 'cron run finished');
     } catch (error) {
       // The session, when one opened, carries the error on its feed; this
       // line is the trace for a run that never got that far.

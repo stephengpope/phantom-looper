@@ -274,26 +274,12 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       if (!project) return reply.code(404).send(err('not_found', 'project vanished'));
       const who = acting();
       const userId = who?.userId ?? null;
-      const runner = await ctx.sessionRunners.placeTurn(userId, session.agent);
-      if (!runner) return reply.code(409).send(err('no_runner', `no session runner online can drive a '${session.agent}' agent for you — nothing changed`, true));
-      const settings = await ctx.settings.resolveMany(['session_lock_ttl_ms'], scopeOf(project));
-      const expires = await ctx.sessions.transferLock(session.id, client, runner.id, runner.name, Number(settings.session_lock_ttl_ms));
-      if (!expires) return reply.code(409).send(err('session_not_held', 'the hold moved before the hand-off — nothing changed'));
-      ctx.sessionEvents.publish(session.id, client, lockEvent(session, { locked: true, by: runner.id, label: runner.name, expires }));
-      const job = { sessionId: session.id, agentType: session.agent, opening: req.body?.opening ?? [], actor: actorOf(req),
-        actingFor: { organizationId: who?.organizationId ?? project.organizationId, ...(userId ? { userId } : {}) } };
-      log.info({ session: session.id, from: client, to: runner.name, opening: job.opening.length }, 'turn handed off');
-      // The job runs the rest of the turn; its answer is the log's. A job
-      // that fails before its agent ever held the session leaves the moved
-      // hold with nobody behind it: released here, so the session is free.
-      void runner.turn(job).then(
-        (result) => log.info({ session: session.id, runner: runner.name, outcome: result.outcome }, 'handed-off turn finished'),
-        async (error: unknown) => {
-          log.warn({ session: session.id, runner: runner.name, err: errStr(error) }, 'handed-off turn failed');
-          const now = await ctx.sessions.get(session.id);
-          if (now && now.lockedBy === runner.id) await releaseHold(ctx, now, runner.id);
-        });
-      return ok({ runner: { id: runner.id, name: runner.name } });
+      const placed = await ctx.turns.handoff(session, project, client, {
+        agentType: session.agent, opening: req.body?.opening ?? [], actor: actorOf(req),
+        actingFor: { organizationId: who?.organizationId ?? project.organizationId, ...(userId ? { userId } : {}) } });
+      if (placed === 'no_runner') return reply.code(409).send(err('no_runner', `no session runner online can drive a '${session.agent}' agent for you — nothing changed`, true));
+      if (placed === 'lost') return reply.code(409).send(err('session_not_held', 'the hold moved before the hand-off — nothing changed'));
+      return ok({ runner: placed.runner });
     });
 
   // Ask whoever drives this session's turn to hand it to a session runner:

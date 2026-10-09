@@ -52,6 +52,7 @@ import { Notifications } from './Notifications.js';
 import { Mailer } from './mail/Mailer.js';
 import { Media } from './media/Media.js';
 import { CronScheduler, CRON_STARTER, type CronAgent } from './crons/CronScheduler.js';
+import { Turns } from './host/Turns.js';
 import { Identity, type IdentityOptions } from './identity/Identity.js';
 import { SessionTitler, type TitleWriter } from './agents/SessionTitler.js';
 import { HttpApi } from './api/HttpApi.js';
@@ -191,6 +192,9 @@ export class PhantomBackend {
   /** The hosts workspaces run on: the backend's own (this process) and every
    *  session runner that registered — and where each workspace is. */
   readonly sessionRunners: SessionRunners;
+  /** Turns driven on session runners: placed for an engine's session, or
+   *  handed off from a running driver (host/Turns.ts). */
+  readonly turns: Turns;
 
   // ── telegram tables ──────────────────────────────────────────────────
   readonly telegramBotState: TelegramBotState;
@@ -214,6 +218,7 @@ export class PhantomBackend {
     this.docker = built.docker; this.images = built.images; this.sessionContainers = built.sessionContainers;
     this.deployment = new Deployment(built.paths, built.tokenLog, built.docker, built.images, config.deployment);
     this.sessionRunners = built.sessionRunners; this.telegramBotState = built.telegramBotState;
+    this.turns = new Turns(this.sessions, this.sessionRunners, this.settings, this.sessionEvents);
     this.telegramSentMessages = built.telegramSentMessages; this.telegramHandledUpdates = built.telegramHandledUpdates;
     this.sessionTitler = new SessionTitler(this.sessions, config.writeTitle);
     this.mailer = new Mailer(this.settings);
