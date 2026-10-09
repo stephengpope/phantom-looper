@@ -24,7 +24,7 @@ export const APP_VERSION: string = process.env.APP_VERSION ?? 'dev';
 
 /** The api's OWN image name. A container cannot name its own image from
  *  inside; compose hands it in so the disk cleanup can prune its old tags. */
-export const API_IMAGE: string = process.env.API_IMAGE ?? 'ghcr.io/stephengpope/phantom-backend-api';
+export const API_IMAGE: string = process.env.API_IMAGE ?? 'ghcr.io/stephengpope/phantom-backend';
 
 export function readEnv(source: NodeJS.ProcessEnv = process.env): Env {
   const need = (name: string): string => {

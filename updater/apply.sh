@@ -33,7 +33,7 @@ set -eu
 
 TAG="${1:?usage: apply.sh <tag>}"
 BACKEND_DIR="${BACKEND_DIR:-/opt/phantom-looper}"
-API_IMAGE="${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}"
+API_IMAGE="${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}"
 # Where the image keeps the host files (Dockerfile). Mirrors the install
 # directory's layout, so extraction is a straight copy.
 IMAGE_HOST_DIR=/host-files

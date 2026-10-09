@@ -434,6 +434,8 @@ export interface CheckoutFacts {
   lastUsedAt: Date;
   lastPushAt: Date | null;
   workState: string | null;
+  /** The session host the checkout is on; null = this server (062). */
+  sessionHostId: string | null;
 }
 /** A session as reads return it — sessionColumns' shape, blobs excluded,
  *  its workspace's facts joined in (Sessions.view). */

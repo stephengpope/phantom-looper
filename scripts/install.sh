@@ -47,7 +47,7 @@ set -eu
 # The image is the whole release: the server, and the host files this script
 # unpacks into $DIR. Overridable for testing (point API_IMAGE at a locally built
 # name, DIR at a temp dir).
-API_IMAGE="${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}"
+API_IMAGE="${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}"
 DIR="${BACKEND_DIR:-/opt/phantom-looper}"
 
 # Empty = not passed. A re-run only overwrites what was actually given, so

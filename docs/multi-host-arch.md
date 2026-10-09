@@ -26,7 +26,7 @@ never dropped. One transport underneath: HTTPS/2 through Caddy, the backend's
 own CA when it runs one. There is no other.
 
 **`SessionHost`** (`host/SessionHost.ts`) — the host process: `LocalHost`
-behind a `Link`. Same image as the backend (`phantom-backend-api`), the host
+behind a `Link`. Same image as the backend (`phantom-backend`), the host
 entrypoint (`dist/phantom-backend/host.js`), one compose file
 (`session-host/docker-compose.yml`). No database, no settings, no secrets of
 its own — every job carries what it needs.
@@ -86,7 +86,7 @@ whatever is unpushed on that box behind.
 
 | | |
 |---|---|
-| image | `phantom-backend-api` (backend and host alike) |
+| image | `phantom-backend` (backend and host alike) |
 | server stack | `phantom-backend` → `phantom-backend-api-1`, … |
 | host stack | `phantom-backend-session-host` → `phantom-backend-session-host`, `phantom-backend-session-host-docker-proxy-1` |
 | workspace containers | `phantom-backend-workspace-<workspace id>` |

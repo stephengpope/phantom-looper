@@ -24,7 +24,7 @@ import { savedCaFor, apiFor } from './provision.js';
 import { APP_VERSION } from './selfUpdate.js';
 
 const HOST_DIR = join(CONFIG_DIR, 'host');
-const IMAGE = 'ghcr.io/stephengpope/phantom-backend-api';
+const IMAGE = 'ghcr.io/stephengpope/phantom-backend';
 
 function sh(command: string, args: string[], opts: { cwd?: string; capture?: boolean } = {}): SpawnSyncReturns<string> {
   return spawnSync(command, args, { cwd: opts.cwd, encoding: 'utf8', stdio: opts.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit' });

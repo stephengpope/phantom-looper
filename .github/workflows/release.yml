@@ -3,7 +3,7 @@ name: Release
 # Fires on a version tag:  git tag v0.2.0 && git push --tags
 #
 # One tag → two images, both multi-arch (amd64 + arm64), pushed to ghcr.io:
-#   ghcr.io/stephengpope/phantom-backend-api       the API server (Dockerfile)
+#   ghcr.io/stephengpope/phantom-backend       the API server (Dockerfile)
 #   ghcr.io/stephengpope/phantom-backend-session   every session's container (build/session)
 # Each platform builds NATIVELY (images, 4 jobs) and pushes by digest; the
 # manifests job (2 jobs) stitches each pair into one multi-arch tag.
@@ -46,7 +46,7 @@ jobs:
       fail-fast: false
       matrix:
         image:
-          - name: phantom-backend-api
+          - name: phantom-backend
             context: .
             dockerfile: Dockerfile
           - name: phantom-backend-session
@@ -98,7 +98,7 @@ jobs:
       packages: write
     strategy:
       matrix:
-        name: [phantom-backend-api, phantom-backend-session]
+        name: [phantom-backend, phantom-backend-session]
     steps:
       - uses: actions/download-artifact@v8
         with:

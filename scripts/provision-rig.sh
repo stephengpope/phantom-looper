@@ -18,7 +18,7 @@ cd "$(dirname "$0")/.."
 
 NAME=phantom-rig
 RIG_DIR=/tmp/phantom-rig
-API_IMAGE=ghcr.io/stephengpope/phantom-backend-api
+API_IMAGE=ghcr.io/stephengpope/phantom-backend
 SESSION_IMAGE=ghcr.io/stephengpope/phantom-backend-session
 SSH_PORT=2222
 

@@ -12,7 +12,7 @@ name: phantom-backend-session-host
 services:
   session-host:
     container_name: phantom-backend-session-host
-    image: ${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}:${BACKEND_TAG:-latest}
+    image: ${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}:${BACKEND_TAG:-latest}
     pull_policy: missing
     restart: unless-stopped
     depends_on:
@@ -38,7 +38,7 @@ services:
       AGENT_NETWORK: ${AGENT_NETWORK:-phantom-agents}
       # The disk-quota helper, with the `disk-quota` profile on (XFS + pquota only).
       DISK_QUOTA_URL: http://disk-quota:7000
-      API_IMAGE: ${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}
+      API_IMAGE: ${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}
     volumes:
       - workspaces:/workspaces
     networks: [default, docker]
@@ -67,7 +67,7 @@ services:
 
   # The disk-quota helper, as on a server (docs/permissions.md). Not on a Mac.
   disk-quota:
-    image: ${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}:${BACKEND_TAG:-latest}
+    image: ${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}:${BACKEND_TAG:-latest}
     pull_policy: missing
     profiles: ["disk-quota"]
     restart: unless-stopped
