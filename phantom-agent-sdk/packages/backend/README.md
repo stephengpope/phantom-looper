@@ -46,7 +46,7 @@ invitation adds membership in another; a cli carries the session token as a
 bearer, a program an API key. `backend.identity.callerOf(request)` says who
 is calling — the service role or a user in their organization. The service role
 bootstraps the first user with `POST /api/identity/users` and
-`POST /api/identity/magic-link`. docs/permissions.md has the whole of it.
+`POST /api/identity/magic-link`.
 
 **Storage.** The SDK's tables live in the Postgres schema `phantom_agent_sdk`
 with their own migration ledger (`migrations/`, shipped in this package, run

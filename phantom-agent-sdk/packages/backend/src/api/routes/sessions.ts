@@ -674,7 +674,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       // The session's notes land now, under the hold, ahead of whatever the
       // caller sends: the caller reads the record after this. Written, they
       // are part of the conversation — never handed back, whatever the turn
-      // does next (docs/message-queues.md).
+      // does next.
       const notes = ctx.sessionNotes.drain(session.id);
       // The row as the turn starts: after the hold, after the notes.
       let atStart = session;

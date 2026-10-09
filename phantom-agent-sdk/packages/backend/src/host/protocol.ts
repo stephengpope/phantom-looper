@@ -39,7 +39,7 @@ export type Job = { id: string } & (
   | { type: 'disk' }
   | { type: 'diskSupport' }
   /** Maintenance, on the API's timer, run where the volume is: the warm
-   *  checkout tick for these projects (docs/multi-host-arch.md), and the
+   *  checkout tick for these projects, and the
    *  prune of release images older than `keep` that no container uses. */
   | { type: 'poolTick'; projects: PoolProject[] }
   | { type: 'removeOldImages'; keep: string[] }
@@ -75,8 +75,7 @@ export interface HostHello {
   facts: HostFacts;
 }
 
-/** What a host is carrying, on every heartbeat. `cpu` places (docs/
- *  multi-host-arch.md, Placement): the one-minute load average over the CPU count,
+/** What a host is carrying, on every heartbeat. `cpu` places: the one-minute load average over the CPU count,
  *  1.0 = every core busy. The rest is the status line's. */
 export interface HostLoad {
   cpu: number;

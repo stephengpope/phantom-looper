@@ -1,7 +1,7 @@
 // The user message queue: what a PERSON sent while a turn ran, waiting to
 // reach the model, in order. Text only, and only a person's words — the
-// system's facts are the server's session notes, never queued here
-// (docs/message-queues.md). What a drain triggers (riding or driving) is
+// system's facts are the server's session notes, never queued here.
+// What a drain triggers (riding or driving) is
 // the Agent's rule, not the queue's; the Agent is the only one who adds and
 // drains. Words a run took and the model never answered go back to the
 // FRONT (they were said first) and wait — the next message takes them

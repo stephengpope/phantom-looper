@@ -49,7 +49,7 @@ const BASE = 'http://looper/api';
  *  interrupts the agent; a remote interrupt reaches it over the session feed
  *  the agent itself listens to. */
 /** The agent running a turn for one key. A message that arrives meanwhile
- *  goes to ITS queue (the client SDK's — docs/message-queues.md): it rides
+ *  goes to ITS queue (the client SDK's): it rides
  *  the model's next call, or drives the next run when the model stopped. */
 interface InFlightTurn { agent: Agent }
 

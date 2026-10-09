@@ -131,7 +131,7 @@ export abstract class Agent {
   addToolKit(kit: ToolKit): this { this.#kits.add(kit); return this; }
 
   // ── the user's words ───────────────────────────────────────────────────
-  // docs/message-queues.md. A user message starts a turn. Text sent WHILE a
+  // A user message starts a turn. Text sent WHILE a
   // turn runs is queued — this queue holds a person's words and nothing
   // else. Queued text RIDES the model's next call while it is mid-run
   // (written then, never handed back), or DRIVES the next run when the

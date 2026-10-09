@@ -1,5 +1,5 @@
 // Who the current work is for — the one context every database read and
-// write runs under (docs/permissions.md).
+// write runs under.
 //
 // A request from a user (sign-in token or user API key), or from the server
 // key acting for one, runs inside `actAs`: every query on the shared

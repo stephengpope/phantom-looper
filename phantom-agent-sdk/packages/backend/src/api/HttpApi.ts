@@ -1,6 +1,6 @@
 // HttpApi — the HTTP surface: Fastify, the envelope ({ok, data} /
 // {ok:false, error:{code, message, retryable}}), and three prefixes that say
-// who owns a route and who may call it (docs/permissions.md):
+// who owns a route and who may call it:
 //
 //   /api/*       the SDK's routes: the service role key, or a user (sign-in
 //                token or user API key)
@@ -9,7 +9,7 @@
 //   /app/*       user space's routes (config.routes); anyone reaches them —
 //                the app gates each with backend.identity.require
 //
-// THE front step (docs/permissions.md), on /api and /app alike: who is
+// THE front step, on /api and /app alike: who is
 // calling, and who the work is for. A user's request — or the service role's
 // naming one with x-phantom-organization / x-phantom-user — runs as that
 // organization and user (lib/acting.ts): every query it makes is fenced by

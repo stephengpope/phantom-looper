@@ -12,7 +12,7 @@
 // writes once, before it returns. A write that fails after retries STOPS
 // the turn (transcript_write_failed). Nothing runs unrecorded.
 //
-// The user's words reach a model run one of two ways (docs/message-queues.md):
+// The user's words reach a model run one of two ways:
 //   driving → the words a run OPENS with: the turn's message, or what was
 //             queued when the model had stopped. Written with the model's
 //             first answer. If the run fails before that answer they were

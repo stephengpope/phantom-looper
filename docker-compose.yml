@@ -168,8 +168,8 @@ services:
 
   # The disk-quota helper: caps each agent checkout with an XFS project quota
   # (phantom-agent-sdk/.../runtime/diskQuotaHelper.ts). Needs Docker's data
-  # (/var/lib/docker) on XFS mounted with pquota — a manual server setup, see
-  # docs/permissions.md. On with COMPOSE_PROFILES including disk-quota.
+  # (/var/lib/docker) on XFS mounted with pquota — a manual server setup.
+  # On with COMPOSE_PROFILES including disk-quota.
   # Privileged with Docker's data mounted: host-level, so it answers two
   # calls only and sits on the API's own internal network, out of every
   # agent's reach.

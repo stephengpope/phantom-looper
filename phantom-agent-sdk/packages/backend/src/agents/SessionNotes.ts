@@ -2,8 +2,8 @@
 // for a session's agent, written into its record at its NEXT turn's start,
 // without a turn being started for them. A detached command exiting, a git
 // sync that landed or conflicted. They
-// are NOT user messages: a person's words wait in the client SDK's queue
-// (docs/message-queues.md). A note is written ahead of the turn's own words,
+// are NOT user messages: a person's words wait in the client SDK's queue.
+// A note is written ahead of the turn's own words,
 // and once written it is part of the conversation — it is never handed back,
 // whatever happens to the turn.
 // In-memory by design: a note is a courtesy, never the record — the fact it

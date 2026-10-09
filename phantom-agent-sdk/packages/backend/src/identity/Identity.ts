@@ -1,4 +1,4 @@
-// Identity — who a caller is. The one owner of Better Auth (docs/permissions.md):
+// Identity — who a caller is. The one owner of Better Auth:
 // its tables (storage/schema.ts, schema `identity`), its routes (mounted at
 // /api/auth/*), and the answer every other route wants: `callerOf(request)`.
 //

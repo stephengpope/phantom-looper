@@ -97,7 +97,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks: [docker]
 
-  # The disk-quota helper, as on a server (docs/permissions.md). Not on a Mac.
+  # The disk-quota helper, as on a server. Not on a Mac.
   disk-quota:
     image: ${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}:${BACKEND_TAG:-latest}
     pull_policy: missing

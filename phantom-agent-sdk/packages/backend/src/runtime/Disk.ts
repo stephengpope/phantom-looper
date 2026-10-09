@@ -219,7 +219,7 @@ export async function diskCleanup(deps: CleanupDeps): Promise<void> {
 }
 
 /** Disk cleanup against the real system, one box at a time: this server's
- *  disk, then every online session runner's (docs/multi-host-arch.md). A
+ *  disk, then every online session runner's. A
  *  disk is freed only by what is on it: each box is measured itself, prunes
  *  its own old images, and gives up only the workspaces placed on it. The
  *  decisions — which sessions, idle, busy, landed, backed up — are the
