@@ -5,7 +5,7 @@
 //   POST   /session-hosts/:id/jobs/events    the host's relay: job events up
 //   GET    /session-hosts                    the hosts a caller may see, with online
 //   DELETE /session-hosts/:id                forget an offline, empty host
-//   POST   /sessions/:id/host                move a session's workspace to another host
+//   POST   /sessions/:id/move                move a session's workspace to another host
 //
 // Who may: the root API key for shared hosts, a user for their own — the row's
 // owner, checked on every call in SessionHosts. The feed is the one long
@@ -103,7 +103,7 @@ export function sessionHostRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // in the database and the branch is on origin, so the session carries on.
   // An offline source cannot push: `force` leaves whatever is unpushed on
   // that box behind — the caller's decision, said out loud.
-  app.post<{ Params: { id: string }; Body: { session_host_id: string | null; force?: boolean; wait_ms?: number } }>('/sessions/:id/host', { schema: { ...TAG, summary: 'Move a session to a host',
+  app.post<{ Params: { id: string }; Body: { session_host_id: string | null; force?: boolean; wait_ms?: number } }>('/sessions/:id/move', { schema: { ...TAG, summary: 'Move a session to a host',
     description: 'Moves the session\'s workspace to the named session host (null: this server). New tool calls wait; a command already running is waited for (wait_ms, default two minutes) so the move happens between two tool calls; then the branch is pushed, the scratch pad carried over, the container and files removed where they were, and the branch checked out on the new host. Detached tasks die with the container. force: move even when the current host is offline (leaving unpushed work there) or a command outlasts wait_ms (killing it).',
     params: idParam, body: { type: 'object', required: ['session_host_id'], properties: { session_host_id: { type: ['string', 'null'] }, force: { type: 'boolean' }, wait_ms: { type: 'integer', minimum: 0 } } } } },
   async (req, reply) => {

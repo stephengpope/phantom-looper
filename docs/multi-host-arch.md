@@ -76,7 +76,7 @@ retryable. Background work that must not hang on a closed laptop checks
 
 ## Move
 
-`POST /sessions/:id/host { session_host_id, wait_ms?, force? }`. A move
+`POST /sessions/:id/move { session_host_id, wait_ms?, force? }`. A move
 happens BETWEEN two tool calls, never under one:
 
 1. The workspace is marked moving: every new tool call for it waits.
