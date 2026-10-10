@@ -312,10 +312,12 @@ export const formatTokensOut = (count: number): string => `↓ ${formatTokens(co
 /** THE cache hit rate of one model call: the share of its prompt the
  *  provider served from cache (cache reads / input). After AI SDK v7,
  *  `input` is already the total (noCache + cacheRead + cacheWrite), so the
- *  rate is simply cacheRead / input. Null when nothing was sent (nothing to
- *  rate); 0 is a real answer — cache not working. */
+ *  rate is simply cacheRead / input. FLOORED, never rounded: a call is
+ *  never fully cached (your new message is always fresh), so 99.97% reads
+ *  99 — 100 would be a lie. Null when nothing was sent (nothing to rate);
+ *  0 is a real answer — cache not working. */
 export function cachePct(input: number, cacheRead: number): number | null {
-  return input > 0 ? Math.round((cacheRead / input) * 100) : null;
+  return input > 0 ? Math.floor((cacheRead / input) * 100) : null;
 }
 
 /** THE token report — the three numbers worth a glance, in one shape for
