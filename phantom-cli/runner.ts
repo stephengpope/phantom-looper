@@ -1,9 +1,9 @@
-// `phantom-cli runner` — a session runner on THIS machine: a box that runs your
-// workspaces for the backend you are paired with. Docker runs it, from the
-// same compose file a server runs (session-runner/ in the
-// release image): `start` extracts that file from the release's image,
-// writes its .env from the pairing (the url, the key, this machine's name),
-// and brings it up; `stop` takes it down (the volume stays); `status` asks
+// `phantom-cli runner` — the runners on THIS machine: a session runner that
+// runs your workspaces and a client runner that runs turns, for the backend
+// you are paired with. Docker runs them from one compose file (runners/ in
+// the release image): `start` extracts it from the release's image, writes
+// its .env from the pairing (the url, the key, this machine's name), and
+// brings both up; `stop` takes them down (the volume stays); `status` asks
 // the backend what it sees.
 //
 //   phantom-cli runner start [--name <label>] [--tag <vX.Y.Z>]
@@ -55,8 +55,8 @@ function extractComposeFiles(tag: string): void {
   if (created.status !== 0) throw new Error(`could not create a container from ${image}: ${created.stderr}`);
   const cid = created.stdout.trim();
   try {
-    const copied = sh('docker', ['cp', `${cid}:/host-files/session-runner/.`, `${HOST_DIR}/`], { capture: true });
-    if (copied.status !== 0) throw new Error(`the image has no session-runner files (released before session runners?): ${copied.stderr}`);
+    const copied = sh('docker', ['cp', `${cid}:/host-files/runners/.`, `${HOST_DIR}/`], { capture: true });
+    if (copied.status !== 0) throw new Error(`the image has no runners/ files (released before runners?): ${copied.stderr}`);
   } finally {
     sh('docker', ['rm', '-f', cid], { capture: true });
   }
@@ -109,17 +109,17 @@ export async function runRunner(args: string[]): Promise<number> {
       // compose would refuse to share across projects.
       WORKSPACE_VOLUME: 'phantom-runner-workspaces',
     });
-    console.log(`starting session runner "${name}" for ${url} (${IMAGE}:${tag})`);
+    console.log(`starting the runners "${name}" for ${url} (${IMAGE}:${tag}) — a session runner and a client runner`);
     const code = compose(['up', '-d']);
-    if (code === 0) console.log('session runner up — `phantom-cli runner status` shows what the backend sees, `phantom-cli runner logs` follows it');
+    if (code === 0) console.log('runners up — `phantom-cli runner status` shows what the backend sees, `phantom-cli runner logs` follows them');
     return code;
   }
-  if (!existsSync(join(HOST_DIR, 'docker-compose.yml'))) { console.error('no session runner on this machine — phantom-cli runner start'); return 1; }
+  if (!existsSync(join(HOST_DIR, 'docker-compose.yml'))) { console.error('no runners on this machine — phantom-cli runner start'); return 1; }
   if (command === 'stop') return compose(['down']);
-  if (command === 'logs') return compose(['logs', '-f', 'session-runner']);
+  if (command === 'logs') return compose(['logs', '-f', 'runner']);
   if (command === 'update') {
     // The backend does it: the runner pulls the images and its sidecar
-    // recreates the stack (session-runner/docker-compose.yml). This machine's
+    // recreates the stack (runners/docker-compose.yml). This machine's
     // runner is the one whose name .env holds.
     const tag = args[1] ?? await checkLatest();
     if (!tag) { console.error('could not reach GitHub to find the latest release — name one: phantom-cli runner update vX.Y.Z'); return 1; }
@@ -143,12 +143,13 @@ export async function runRunner(args: string[]): Promise<number> {
   if (command === 'status') {
     compose(['ps']);
     try {
-      const listed = await apiFor(url, key, savedCaFor(url))('GET', '/session-runners') as { hosts: Array<{ id: string; name: string; online: boolean; ownerUserId: string | null; workspaces: number; connectedAt: string | null; version: string | null; load: { cpu: number; freeGB: number; usedPct: number; running: number } | null }> };
-      if (!listed.hosts.length) { console.log('the backend knows no session runners'); return 0; }
+      const listed = await apiFor(url, key, savedCaFor(url))('GET', '/runners') as { hosts: Array<{ id: string; name: string; online: boolean; ownerUserId: string | null; workspaces: number; connectedAt: string | null; version: string | null; sessions: boolean; clients: boolean; load: { cpu: number; freeGB: number; usedPct: number; running: number } | null }> };
+      if (!listed.hosts.length) { console.log('the backend knows no runners'); return 0; }
       console.log('\nthe backend sees:');
       for (const host of listed.hosts) {
         const load = host.load ? `  cpu ${host.load.cpu.toFixed(2)}  ${host.load.running} running  ${Math.round(host.load.freeGB)} GB free` : '';
-        console.log(`  ${host.online ? '●' : '○'} ${host.name}  ${host.version ? bare(host.version) : '?'}  ${host.ownerUserId ? 'user runner' : 'shared runner'}  ${host.workspaces} workspace${host.workspaces === 1 ? '' : 's'}${load}  ${host.online ? 'online' : `offline${host.connectedAt ? ` (last ${host.connectedAt})` : ''}`}  ${host.id}`);
+        const runs = [host.sessions ? 'sessions' : '', host.clients ? 'clients' : ''].filter(Boolean).join('+');
+        console.log(`  ${host.online ? '●' : '○'} ${host.name}  ${host.version ? bare(host.version) : '?'}  ${host.ownerUserId ? 'user' : 'shared'} ${runs} runner  ${host.sessions ? `${host.workspaces} workspace${host.workspaces === 1 ? '' : 's'}` : ''}${load}  ${host.online ? 'online' : `offline${host.connectedAt ? ` (last ${host.connectedAt})` : ''}`}  ${host.id}`);
       }
     } catch (error) { console.error(`could not ask the backend: ${(error as Error).message}`); return 1; }
     return 0;

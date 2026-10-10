@@ -23,7 +23,7 @@ import type { ProjectRow, SessionRow } from '../storage/schema.js';
 import type { Sessions } from '../storage/Sessions.js';
 import type { Settings } from '../storage/Settings.js';
 import type { SessionEvents } from '../agents/SessionEvents.js';
-import type { SessionRunners } from './SessionRunners.js';
+import type { Runners } from './Runners.js';
 import type { Job, TurnJobResult } from './protocol.js';
 import { scopeOf } from '../lib/scopes.js';
 import { logger, errStr } from '../lib/log.js';
@@ -40,7 +40,7 @@ export interface PlacedTurn { runner: { id: string; name: string }; result: Prom
 export class Turns {
   constructor(
     private readonly sessions: Sessions,
-    private readonly runners: SessionRunners,
+    private readonly runners: Runners,
     private readonly settings: Settings,
     private readonly events: SessionEvents,
   ) {}

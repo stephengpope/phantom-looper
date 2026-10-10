@@ -27,7 +27,7 @@ export function tasksRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   /** The session's container, probed on its host WITHOUT creating one —
    *  listing must never boot a container just to answer "nothing". */
   const probe = async (workspaceId: string): Promise<{ state: 'absent' | 'stopped' | 'running'; sandbox: Sandbox | null }> => {
-    const host = await ctx.sessionRunners.of(workspaceId);
+    const host = await ctx.runners.of(workspaceId);
     const state = await host.containerState(workspaceId);
     return { state, sandbox: state === 'running' ? host.sandbox(workspaceId) : null };
   };

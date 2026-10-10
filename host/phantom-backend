@@ -20,8 +20,6 @@ ROOT_CRT=/data/caddy/pki/authorities/local/root.crt
 
 # Subshell: this must not change the caller's working directory.
 compose() { (cd "$DIR" && docker compose "$@"); }
-# The session runner install.sh started beside the api, when there is one.
-runner_compose() { [ -f "$DIR/session-runner/.env" ] && (cd "$DIR/session-runner" && docker compose "$@"); }
 
 env_get() { grep "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true; }
 
@@ -131,8 +129,8 @@ usage() {
   cat <<EOF
 phantom-backend — manage this phantom-looper server (install dir: $DIR)
 
-  phantom-backend status            are the containers up (the api stack, then this box's session runner)
-  phantom-backend logs [service]    follow a service's log (default: api; `runner` = this box's session runner)
+  phantom-backend status            are the containers up (api, caddy, the runners, …)
+  phantom-backend logs [service]    follow a service's log (default: api; session-runner, client-runner, …)
   phantom-backend check             test the address, certificate and service role key a client uses
   phantom-backend version           the release this server is running
   phantom-backend update vX.Y.Z     upgrade to a release (same path as POST /update)
@@ -142,8 +140,8 @@ EOF
 }
 
 case "${1:-}" in
-  status)  compose ps; runner_compose ps ;;
-  logs)    if [ "${2:-}" = runner ]; then runner_compose logs -f --tail 200 session-runner; else compose logs -f --tail 200 "${2:-api}"; fi ;;
+  status)  compose ps ;;
+  logs)    compose logs -f --tail 200 "${2:-api}" ;;
   check)   cmd_check ;;
   version) load_env; authed_curl -fsS "$LOCAL/health"; echo ;;
   update)  cmd_update "${2:-}" ;;

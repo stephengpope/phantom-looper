@@ -33,7 +33,7 @@ const skillDir = (name: string) => `repo/${SKILLS_DIR}/${name}`;
 const skillDirContainer = (name: string) => `/workspace/repo/${SKILLS_DIR}/${name}`;
 
 const filesOf = async (ctx: PhantomBackend, workspaceId: string): Promise<WorkspaceFiles> =>
-  (await ctx.sessionRunners.of(workspaceId)).files(workspaceId);
+  (await ctx.runners.of(workspaceId)).files(workspaceId);
 
 async function skillExists(files: WorkspaceFiles, name: string): Promise<boolean> {
   return (await files.stat(`${skillDir(name)}/SKILL.md`)) !== null;

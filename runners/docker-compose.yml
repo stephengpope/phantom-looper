@@ -1,20 +1,22 @@
-# A SESSION RUNNER: a box that runs workspaces for a phantom-backend somewhere
-# else. The same image as the API with the runner entrypoint, the same named
-# volume, the same socket proxy — on a server someone runs, or on a Mac
-# (`phantom-cli runner start` writes this file's .env and runs it).
+# THE RUNNERS on a box with no api: a SESSION runner that runs workspaces (its
+# own volume, the socket proxy) and a CLIENT runner that runs turns (nothing
+# but the api) — both from the api's image with the runner entrypoint, each
+# told which it is by RUN_SESSIONS / RUN_CLIENTS. On a Mac, `phantom-cli
+# runner start` writes this file's .env and runs it. A server runs the same
+# two as services of its own group (docker-compose.yml) instead.
 #
-# The runner connects OUT to the backend; nothing listens here. Three values in
-# .env say everything: BACKEND_URL, BACKEND_KEY (the service role key makes a
-# SHARED runner any workspace may land on; a user role key makes THEIR runner, for
-# their workspaces alone — the key's prefix says which), and HOST_NAME (a
-# label; defaults to the container's). RUNNER_DIR is this directory's absolute
-# path: the updater's helper mounts it to recreate the stack on an upgrade.
+# Each runner connects OUT to the backend; nothing listens here. Three values in
+# .env say everything: BACKEND_URL, BACKEND_KEY (the service role key makes
+# SHARED runners anyone's work may land on; a user role key makes THEIR runners,
+# for their work alone — the key's prefix says which), and HOST_NAME (a label;
+# defaults to the container's). RUNNER_DIR is this directory's absolute path:
+# the updater's helper mounts it to recreate the stack on an upgrade.
 #
-# UPGRADES come from the backend (POST /session-runners/:id/update, or the
-# group: /session-runners/update) as a job: the runner pulls the images and
-# writes the tag to /trigger, and the `updater` sidecar — the server's own
-# (updater/watch.sh, apply.sh) — recreates the stack on the new tag.
-name: phantom-backend-session-runner
+# UPGRADES come from the backend (POST /runners/:id/update, or the group:
+# /runners/update) as a job: the runner pulls the images and writes the tag to
+# /trigger, and the `updater` sidecar — the server's own (updater/watch.sh,
+# apply.sh) — recreates the stack on the new tag.
+name: phantom-backend-runners
 
 services:
   session-runner:
@@ -31,6 +33,7 @@ services:
     healthcheck:
       disable: true
     environment:
+      RUN_SESSIONS: 1
       BACKEND_URL: ${BACKEND_URL:?set in .env — the backend's https address}
       BACKEND_KEY: ${BACKEND_KEY:?set in .env — the service role key or your user role key}
       HOST_NAME: ${HOST_NAME:-}
@@ -50,11 +53,33 @@ services:
       UPDATE_TRIGGER_DIR: /trigger
       # The helper container's name: per stack, so a runner on the same
       # daemon as a server (a Mac) never reads the server's helper.
-      HELPER_NAME: ${HELPER_NAME:-phantom-update-run-runner}
+      HELPER_NAME: ${HELPER_NAME:-phantom-update-run-runners}
     volumes:
       - workspaces:/workspaces
       - updater-trigger:/trigger
     networks: [default, docker]
+
+  # The client runner: turns. Same image, same key, same backend; no Docker,
+  # no volume — it calls the model and the api's routes, as a cli does.
+  client-runner:
+    container_name: phantom-backend-client-runner
+    image: ${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}:${BACKEND_TAG:-latest}
+    pull_policy: missing
+    restart: unless-stopped
+    command: ["node", "dist/phantom-backend/runner.js"]
+    healthcheck:
+      disable: true
+    environment:
+      RUN_CLIENTS: 1
+      BACKEND_URL: ${BACKEND_URL:?set in .env — the backend's https address}
+      BACKEND_KEY: ${BACKEND_KEY:?set in .env — the service role key or your user role key}
+      HOST_NAME: ${HOST_NAME:-}
+      BACKEND_CA: ${BACKEND_CA:-}
+      API_IMAGE: ${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}
+      UPDATE_TRIGGER_DIR: /trigger
+      HELPER_NAME: ${HELPER_NAME:-phantom-update-run-runners}
+    volumes:
+      - updater-trigger:/trigger
 
   # The updater sidecar, as on a server: waits for the runner to write a
   # release tag into /trigger, then spawns the one-shot helper that copies
@@ -66,8 +91,8 @@ services:
     network_mode: none
     environment:
       BACKEND_DIR: ${RUNNER_DIR:?set in .env — this directory's absolute path}
-      HOST_FILES_DIR: /host-files/session-runner
-      HELPER_NAME: ${HELPER_NAME:-phantom-update-run-runner}
+      HOST_FILES_DIR: /host-files/runners
+      HELPER_NAME: ${HELPER_NAME:-phantom-update-run-runners}
       BACKEND_API_IMAGE: ${BACKEND_API_IMAGE:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

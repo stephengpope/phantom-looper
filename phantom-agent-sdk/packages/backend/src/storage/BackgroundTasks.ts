@@ -36,7 +36,7 @@ export class BackgroundTasks {
   }
 
   /** How many of these sessions' tasks are still running — part of the SAFE
-   *  STATE a move waits for (routes/sessionRunners.ts). */
+   *  STATE a move waits for (routes/runners.ts). */
   async countRunning(sessionIds: string[]): Promise<number> {
     if (!sessionIds.length) return 0;
     const [row] = await this.database.select({ n: sql<number>`count(*)::int` }).from(backgroundTasks)

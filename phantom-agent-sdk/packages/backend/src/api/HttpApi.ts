@@ -52,7 +52,7 @@ import { TELEGRAM_WEBHOOK_PATH } from '../telegram/webhookPath.js';
 import { mailRoutes } from './routes/mail.js';
 import { mediaRoutes } from './routes/media.js';
 import { identityRoutes } from './routes/identity.js';
-import { sessionRunnerRoutes } from './routes/sessionRunners.js';
+import { runnerRoutes } from './routes/runners.js';
 import { systemRoutes } from './routes/system.js';
 import { IDENTITY_PATH, IdentityError, type Caller } from '../identity/Identity.js';
 import { actAs, type Acting } from '../lib/acting.js';
@@ -164,7 +164,7 @@ export class HttpApi {
       mailRoutes(api, backend);
       mediaRoutes(api, backend);
       identityRoutes(api, backend);
-      sessionRunnerRoutes(api, backend);
+      runnerRoutes(api, backend);
       systemRoutes(api, backend);
     }, { prefix: '/api' });
 

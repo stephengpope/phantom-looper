@@ -19,7 +19,7 @@ const configured = async (ctx: OfferCtx) =>
   Boolean(await ctx.app.settings.resolve('agent_media', scopeOf(ctx.project))) && await ctx.app.media.configured(ctx.project.organizationId);
 const withFiles = async (ctx: OfferCtx) => Boolean(ctx.session.workspaceId) && await configured(ctx);
 /** The session's workspace, on its host. */
-const filesOf = async (ctx: ToolCtx) => { const id = workspaceOf(ctx.session); return (await ctx.app.sessionRunners.of(id)).files(id); };
+const filesOf = async (ctx: ToolCtx) => { const id = workspaceOf(ctx.session); return (await ctx.app.runners.of(id)).files(id); };
 
 const brief = (row: MediaRow) => ({ id: row.id, name: row.name, type: row.mimeType, size: row.size, created_at: row.createdAt.toISOString() });
 

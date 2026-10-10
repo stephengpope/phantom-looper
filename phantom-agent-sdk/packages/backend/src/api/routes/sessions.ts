@@ -4,7 +4,7 @@ import type { TokenRecord } from '../../storage/TokenLog.js';
 import { PERSON } from '@phantom-agent-sdk/client';
 import { SessionError, heldByOther, isHeld, expiredHold, assertDuplicable, ownsWorkspace, workspaceOf } from '../../storage/Sessions.js';
 import { WorkspaceError } from '../../storage/Workspaces.js';
-import { SessionRunnerError } from '../../host/SessionRunners.js';
+import { RunnerError } from '../../host/Runners.js';
 import { GIT_CLIENT_ID, pushFailed } from '../../git/Git.js';
 import { copyScratch } from '../../runtime/scratch.js';
 
@@ -144,7 +144,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       if (unknownBlock(reply, error)) return;
       // Nowhere to put the checkout: no session runner online for this user,
       // and this server runs none itself. Retryable — a host may connect.
-      if (error instanceof SessionRunnerError) return reply.code(409).send(err(error.code, error.message, true));
+      if (error instanceof RunnerError) return reply.code(409).send(err(error.code, error.message, true));
       // The session's own refusals, and the checkout's (a dead token, a repo
       // the token cannot see, GitHub unreachable — Workspaces.checkout).
       if (error instanceof SessionError || error instanceof WorkspaceError) {
@@ -496,7 +496,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         return reply.code(413).send(err('too_large', `file is over ${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB`, true));
       }
       const workspaceId = workspaceOf(session);
-      const a = await writeAttachment((await ctx.sessionRunners.of(workspaceId)).files(workspaceId), data, { filename: req.body.name });
+      const a = await writeAttachment((await ctx.runners.of(workspaceId)).files(workspaceId), data, { filename: req.body.name });
       if (!a) return reply.code(422).send(err('invalid_args', 'the file claims to be an image but is not one', true));
       return ok({ path: a.containerPath, kind: a.kind, name: a.displayName });
     });
@@ -550,12 +550,12 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         // Copy the source's scratch pad into the copy's workspace — same filenames,
         // the copy's container mounts them at the same /workspace/scratch/ path,
         // so every reference in the transcript works without rewriting.
-        await copyScratch(await ctx.sessionRunners.of(workspaceOf(src)), workspaceOf(src), await ctx.sessionRunners.of(copy.id), copy.id)
+        await copyScratch(await ctx.runners.of(workspaceOf(src)), workspaceOf(src), await ctx.runners.of(copy.id), copy.id)
           .catch((error: Error) => log.warn({ session: copy.id, err: error.message }, 'the scratch pad could not be copied'));
         await ctx.sessions.seedCopy(copy, src);
         return reply.code(201).send(ok({ ...copy, copied_from: src.id }));
       } catch (error) {
-        if (error instanceof SessionRunnerError) return reply.code(409).send(err(error.code, error.message, true));
+        if (error instanceof RunnerError) return reply.code(409).send(err(error.code, error.message, true));
         if (error instanceof SessionError || error instanceof WorkspaceError) {
           const status = error.code === 'source_branch_gone' ? 409 : 400;
           return reply.code(status).send(err(error.code, error.message, error.retryable));

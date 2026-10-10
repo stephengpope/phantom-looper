@@ -7,7 +7,7 @@
 import type { Workspaces } from '../storage/Workspaces.js';
 import type { Projects } from '../storage/Projects.js';
 import { workState } from './Git.js';
-import type { SessionRunners } from '../host/SessionRunners.js';
+import type { Runners } from '../host/Runners.js';
 import type { SessionContainers } from '../runtime/SessionContainers.js';
 import type { BoardEvents } from '../agents/BoardEvents.js';
 import { logger, errStr } from '../lib/log.js';
@@ -15,7 +15,7 @@ import { logger, errStr } from '../lib/log.js';
 const log = logger('work-refresh');
 
 export interface WorkRefreshDeps {
-  workspaces: Workspaces; projects: Projects; hosts: SessionRunners;
+  workspaces: Workspaces; projects: Projects; hosts: Runners;
   sessionContainers: SessionContainers;
   boardEvents: BoardEvents;
 }

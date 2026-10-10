@@ -1,8 +1,8 @@
 // The session runner entrypoint — the same image as the API, this process
 // instead of it: a box with Docker and a workspace volume that connects OUT
-// to a backend and runs its workspaces (phantom-agent-sdk SessionRunner).
-// Configured by the environment alone (session-runner/docker-compose.yml).
-import { SessionRunner, logger, errStr } from '@phantom-agent-sdk/backend';
+// to a backend and runs its workspaces (phantom-agent-sdk Runner).
+// Configured by the environment alone (runners/docker-compose.yml).
+import { Runner, logger, errStr } from '@phantom-agent-sdk/backend';
 import { CodingAgent } from '../phantom-looper/agents/coding.js';
 import { SupervisorAgent } from '../phantom-looper/agents/supervisor.js';
 import { AssistantAgent } from '../phantom-looper/agents/assistant.js';
@@ -15,7 +15,7 @@ async function main() {
   // run placed here): this app's three agents, by type — the classes a cli
   // window and the API's engines run — and the card run's kits, which a
   // placed looper turn asks for by name with its card.
-  const host = SessionRunner.fromEnv(process.env, { agents: {
+  const host = Runner.fromEnv(process.env, { agents: {
     coding: { agent: CodingAgent, kits: { 'card-run': (args) => codingAgentCardKit(args.card as CardRunCard) } },
     supervisor: { agent: SupervisorAgent, kits: { 'card-run': (args) => supervisorCardKit(args.card as CardRunCard, args.column as LoopColumn) } },
     assistant: { agent: AssistantAgent },

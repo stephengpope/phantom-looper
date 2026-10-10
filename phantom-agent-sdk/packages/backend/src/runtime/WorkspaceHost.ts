@@ -5,7 +5,7 @@
 //
 //   LocalHost   the primitives, run here: this process's volume and Docker.
 //               The backend's own runner on every server, and the body of a
-//               session runner process (host/SessionRunner.ts), which runs the
+//               session runner process (host/Runner.ts), which runs the
 //               same code against ITS volume and Docker.
 //   RemoteHost  the same primitives as jobs over a session runner's link —
 //               a proxy; nothing runs in this process.

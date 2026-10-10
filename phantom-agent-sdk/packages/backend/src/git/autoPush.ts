@@ -3,7 +3,7 @@
 // argument for it. This file is the result vocabulary the routes and the app
 // already speak, and nothing else.
 import type { ProjectRow, SessionRow } from '../storage/schema.js';
-import type { SessionRunners } from '../host/SessionRunners.js';
+import type { Runners } from '../host/Runners.js';
 import { syncBranch, type SyncEvent, type SyncDeps } from './sync.js';
 import type { Sessions } from '../storage/Sessions.js';
 import type { Workspaces } from '../storage/Workspaces.js';
@@ -27,7 +27,7 @@ export interface AutoPushDeps {
   workspaces: Workspaces;
   cards: Cards;
   settings: Settings;
-  hosts: SessionRunners;
+  hosts: Runners;
   resolve?: SyncDeps['resolve'];
   recordSummary?: SyncDeps['recordSummary'];
   writeCommitMessage?: SyncDeps['writeCommitMessage'];

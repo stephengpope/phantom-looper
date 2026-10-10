@@ -36,7 +36,7 @@ import { API_IMAGE, APP_VERSION } from '../lib/env.js';
 import type { Settings } from '../storage/Settings.js';
 import type { Projects } from '../storage/Projects.js';
 import type { Sessions } from '../storage/Sessions.js';
-import type { SessionRunners } from '../host/SessionRunners.js';
+import type { Runners } from '../host/Runners.js';
 import type { SessionContainers } from './SessionContainers.js';
 import type { WorkspaceHost } from './WorkspaceHost.js';
 import type { GitSync } from '../git/GitSync.js';
@@ -227,7 +227,7 @@ export async function diskCleanup(deps: CleanupDeps): Promise<void> {
  *  This server's box is measured and pruned whether or not it runs
  *  containers: every update pulls an image here. */
 export async function pressureSweep(
-  settings: Settings, projects: Projects, sessions: Sessions, hosts: SessionRunners,
+  settings: Settings, projects: Projects, sessions: Sessions, hosts: Runners,
   sessionContainers: SessionContainers, gitSync: GitSync, busy: (workspaceIds: string[]) => Promise<Set<string>>,
 ): Promise<void> {
   const currents = [String(await settings.resolve('container_image')), API_IMAGE_CURRENT];

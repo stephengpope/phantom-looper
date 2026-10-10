@@ -146,7 +146,7 @@ interface RunnerRow { id: string; name: string; online: boolean; version: string
 /** The session runners the server knows, or none when it has no such route
  *  (a release before runners) or cannot be reached. */
 export async function listRunners(server: ServerLink): Promise<RunnerRow[]> {
-  try { return ((await server.call('GET', '/session-runners')) as { hosts: RunnerRow[] }).hosts; } catch { return []; }
+  try { return ((await server.call('GET', '/runners')) as { hosts: RunnerRow[] }).hosts; } catch { return []; }
 }
 
 /** The runners' half: every online runner behind `tag` (or the one named by
@@ -162,7 +162,7 @@ export async function updateRunners(deps: UpdateDeps, server: ServerLink, tag: s
   deps.out(`Runner${targets.length === 1 ? '' : 's'}: ${targets.map((runner) => `${runner.name} ${runner.version ? bare(runner.version) : '?'} → ${version}`).join(', ')}`);
   const outcome = new Map<string, 'restarting' | 'error'>();
   const images: Record<string, Record<string, PullProgress>> = {};
-  const path = only ? `/session-runners/${only}/update` : '/session-runners/update';
+  const path = only ? `/runners/${only}/update` : '/runners/update';
   try {
     await server.stream(path, { tag, restart_anyway: true }, (raw) => {
       const event = raw as UpdateEvent & { runner?: string };

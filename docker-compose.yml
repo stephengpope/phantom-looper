@@ -79,9 +79,9 @@ services:
       # API never holds the socket and runs non-root.
       DOCKER_HOST: tcp://docker-proxy:2375
       # Place new session containers on this server itself (1). 0, the
-      # default: every new workspace lands on a session runner — install.sh
-      # starts one beside this stack (session-runner/), and any box with Docker
-      # can run another. The api keeps serving whatever it already holds.
+      # default: every new workspace lands on a session runner — the
+      # `session-runner` service below, and any box with Docker can run
+      # another (runners/). The api keeps serving whatever it already holds.
       RUN_SESSION_CONTAINERS: ${RUN_SESSION_CONTAINERS:-0}
       # The named volume, by NAME: workspace containers mount per-session
       # subpaths of it. dockerd resolves mounts host-side, so an API-internal
@@ -228,6 +228,68 @@ services:
   # automatically — they need ports 80 and 443 reachable from the internet).
   # BACKEND_TLS=internal swaps in Caddy's own CA for a private address; its
   # root certificate is the one file a client then trusts (`phantom ca`).
+  # ── The runners on this box ─────────────────────────────────────────────
+  # Two helpers from the api's image with the runner entrypoint, each told
+  # which it is: the SESSION runner runs workspaces and their containers (its
+  # own volume, the socket proxy); the CLIENT runner runs turns and needs
+  # nothing but the api. SESSION_RUNNERS (0 or 1 — one box, one volume) and
+  # CLIENT_RUNNERS (0 to N) in .env say how many of each. They reach the api
+  # through Caddy at the server's own address, as a runner anywhere does;
+  # when the server signs its own certificate (BACKEND_TLS=internal) they
+  # need Caddy's root, BACKEND_CA in .env (install.sh reads it off Caddy once
+  # it is up). RUNNER_NAME is what `runner status` lists them as (install.sh
+  # writes the hostname). The group's updater recreates them with the api on
+  # an upgrade — no sidecar of their own.
+  session-runner:
+    image: ${BACKEND_API_IMAGE:-${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}}:${BACKEND_TAG:-${PHANTOM_BACKEND_TAG:-latest}}
+    pull_policy: missing
+    restart: unless-stopped
+    deploy:
+      replicas: ${SESSION_RUNNERS:-1}
+    depends_on:
+      api:
+        condition: service_healthy
+      docker-proxy:
+        condition: service_started
+    command: ["node", "dist/phantom-backend/runner.js"]
+    healthcheck:
+      disable: true
+    environment:
+      RUN_SESSIONS: 1
+      BACKEND_URL: ${BACKEND_URL:-https://${BACKEND_ADDRESS:-${PHANTOM_BACKEND_ADDRESS:-}}:${BACKEND_HTTPS_PORT:-443}}
+      BACKEND_KEY: ${SERVICE_ROLE_KEY:-ph_service_role_${API_KEY:-}}
+      BACKEND_CA: ${BACKEND_CA:-}
+      HOST_NAME: ${RUNNER_NAME:-}
+      WORKSPACE_ROOT_PATH: /workspaces
+      WORKSPACE_VOLUME: phantom-runner-workspaces
+      DOCKER_HOST: tcp://docker-proxy:2375
+      AGENT_NETWORK: phantom-agents
+      DISK_QUOTA_URL: http://disk-quota:7000
+      API_IMAGE: ${BACKEND_API_IMAGE:-${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}}
+    volumes:
+      - phantom-runner-workspaces:/workspaces
+    networks: [default, docker]
+
+  client-runner:
+    image: ${BACKEND_API_IMAGE:-${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}}:${BACKEND_TAG:-${PHANTOM_BACKEND_TAG:-latest}}
+    pull_policy: missing
+    restart: unless-stopped
+    deploy:
+      replicas: ${CLIENT_RUNNERS:-1}
+    depends_on:
+      api:
+        condition: service_healthy
+    command: ["node", "dist/phantom-backend/runner.js"]
+    healthcheck:
+      disable: true
+    environment:
+      RUN_CLIENTS: 1
+      BACKEND_URL: ${BACKEND_URL:-https://${BACKEND_ADDRESS:-${PHANTOM_BACKEND_ADDRESS:-}}:${BACKEND_HTTPS_PORT:-443}}
+      BACKEND_KEY: ${SERVICE_ROLE_KEY:-ph_service_role_${API_KEY:-}}
+      BACKEND_CA: ${BACKEND_CA:-}
+      HOST_NAME: ${RUNNER_NAME:-}
+      API_IMAGE: ${BACKEND_API_IMAGE:-${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}}
+
   caddy:
     image: caddy:2.11
     profiles: ["https"]
@@ -296,6 +358,8 @@ volumes:
   pg-data:
   phantom-looper-workspaces:
     name: phantom-looper-workspaces   # fixed name — the API references it by name for subpath mounts
+  phantom-runner-workspaces:
+    name: phantom-runner-workspaces   # the session runner's, by name, for the same reason
   cloudbeaver-data:
   caddy-data:
   caddy-config:
