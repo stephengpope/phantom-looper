@@ -224,11 +224,14 @@ export function takeCompleted(turn: Part[]): { done: Part[]; live: Part[] } {
 }
 
 /** Everything in the turn, marked done — used when a turn ends or aborts. */
-export function finalize(turn: Part[], now = Date.now()): Part[] {
+export function finalize(turn: Part[], now = Date.now(), opts: { keepOpenTools?: boolean } = {}): Part[] {
   return turn.map((part) => {
     if (part.kind === 'text') return { ...part, done: true };
     if (part.kind === 'reasoning') return part.done ? part : { ...part, done: true, endedAt: now };
-    if (part.kind === 'tool' && (part.status === 'pending' || part.status === 'running')) {
+    // A tool still open when the turn left this window: interrupted — unless
+    // the turn was HANDED OFF, when the api finishes the call and writes its
+    // result; the record's landing redraws it, so it stays as it was.
+    if (part.kind === 'tool' && (part.status === 'pending' || part.status === 'running') && !opts.keepOpenTools) {
       return { ...part, status: 'error' as const, error: 'interrupted', endedAt: now };
     }
     return part;

@@ -91,6 +91,10 @@ export interface LoadedSession {
   caption: string | null;
   /** Finished (or failed) while you were looking somewhere else. */
   unseen: boolean;
+  /** The turn this window ran was handed to a session runner (its name): the
+   *  open tool calls are the api's to finish, and the record's next landing
+   *  redraws this pane as "continued on <runner>". Cleared by that redraw. */
+  handedOffTo: string | null;
   /** An agent's question about THIS session (the coding agent's "enter code
    *  mode?"), parked here — not on the window — so it shows only while this
    *  session is on screen and the answer lands on the session that asked. */
@@ -188,7 +192,7 @@ export class SessionStore {
       live: [], turn: [],
       remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS,
       usage: { ...fresh.agent.session.usage }, caption: null,
-      unseen: false, ask: null, lastMessageAt: fresh.agent.session.messages.length ? Date.now() : 0, addedAt: ++this.seq,
+      unseen: false, handedOffTo: null, ask: null, lastMessageAt: fresh.agent.session.messages.length ? Date.now() : 0, addedAt: ++this.seq,
       workState: null, draft: fresh.draft ?? '',
       flushParts: () => undefined, unwire: () => undefined,
     };
@@ -276,7 +280,7 @@ export class SessionStore {
       // The turn left for a session runner: this window's part is settled
       // (say's promise, as any ending); the rest arrives over the session
       // feed as someone else's turn, held by the runner.
-      a.on('handed-off', ({ runner }) => { flush(); this.note(entry.id, `handed off to ${runner.name} — the turn goes on there; esc still stops it`); }),
+      a.on('handed-off', ({ runner }) => { flush(); entry.handedOffTo = runner.name; this.note(entry.id, `handed off to ${runner.name} — the turn goes on there; esc still stops it`); }),
     ];
     entry.flushParts = flush;
     return () => { flush(); for (const off of offs) off(); };
@@ -338,7 +342,7 @@ export class SessionStore {
     entry.caption = null;
     if (ran) {
       entry.flushParts();
-      const rest = finalize(entry.turn);
+      const rest = finalize(entry.turn, Date.now(), { keepOpenTools: entry.handedOffTo !== null });
       entry.turn = [];
       if (entry.startedAt) {
         const endedAt = Date.now();
@@ -508,6 +512,12 @@ export class SessionStore {
     if (rest.length) entry.done = [...entry.done, ...rest];
     if (entry.id !== this.activeId) entry.unseen = true;
     this.notify();
+  }
+
+  /** The record landed after a hand-off: the pane was redrawn from it. */
+  clearHandedOff(id: string): void {
+    const entry = this.get(id);
+    if (entry) entry.handedOffTo = null;
   }
 
   /** The feed said who holds the session (or that nobody does). */
