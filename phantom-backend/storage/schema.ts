@@ -18,6 +18,9 @@ export const telegramChatState = phantomLooper.table('telegram_chat_state', {
   mode: text('mode').notNull().default('assistant'),
   activeSessionId: text('active_session_id'),
   activeProjectId: text('active_project_id'),
+  // /stream: what of the session the chat is on streams in — on, all, off
+  // (telegram/watch.ts). Migration 005.
+  stream: text('stream').notNull().default('on'),
 });
 
 // The looper's two switches on a card (002): auto_plan gates the plan

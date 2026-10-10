@@ -6,6 +6,7 @@
 import { eq } from 'drizzle-orm';
 import type { Drizzle } from '@phantom-agent-sdk/backend';
 import { telegramChatState } from '../storage/schema.js';
+import { STREAM_MODES, type TelegramStream } from './watch.js';
 
 export type TelegramMode = 'assistant' | 'code';
 
@@ -13,6 +14,8 @@ export interface TelegramAssistantStateRow {
   mode: TelegramMode;
   activeSessionId: string | null;
   activeProjectId: string | null;
+  /** What of the session the chat is on streams in (telegram/watch.ts). */
+  stream: TelegramStream;
 }
 
 export const MODE_MESSAGE: Record<TelegramMode, string> = {
@@ -20,7 +23,7 @@ export const MODE_MESSAGE: Record<TelegramMode, string> = {
   assistant: "🏠 You're now talking to the assistant.",
 };
 
-const EMPTY: TelegramAssistantStateRow = { mode: 'assistant', activeSessionId: null, activeProjectId: null };
+const EMPTY: TelegramAssistantStateRow = { mode: 'assistant', activeSessionId: null, activeProjectId: null, stream: 'on' };
 
 export class TelegramAssistantState {
   constructor(private readonly database: Drizzle) {}
@@ -33,7 +36,8 @@ export class TelegramAssistantState {
       return { ...EMPTY };
     }
     const row = rows[0];
-    return { mode: row.mode === 'code' ? 'code' : 'assistant', activeSessionId: row.activeSessionId, activeProjectId: row.activeProjectId };
+    return { mode: row.mode === 'code' ? 'code' : 'assistant', activeSessionId: row.activeSessionId, activeProjectId: row.activeProjectId,
+      stream: (STREAM_MODES as readonly string[]).includes(row.stream) ? row.stream as TelegramStream : 'on' };
   }
 
   private async patch(chatId: number, values: Omit<Partial<typeof telegramChatState.$inferInsert>, 'chatId'>): Promise<void> {
@@ -54,6 +58,11 @@ export class TelegramAssistantState {
    *  the mode is untouched. The session must exist (foreign key). */
   async setActiveSession(chatId: number, sessionId: string): Promise<void> {
     await this.patch(chatId, { activeSessionId: sessionId });
+  }
+
+  /** /stream — what of the session the chat is on streams in. */
+  async setStream(chatId: number, stream: TelegramStream): Promise<void> {
+    await this.patch(chatId, { stream });
   }
 
   /** The project /new opens sessions in. Must exist (foreign key). */

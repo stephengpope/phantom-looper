@@ -30,6 +30,7 @@ import { hasCatalog } from '@phantom-agent-sdk/backend';
 import { isHeld } from '@phantom-agent-sdk/backend';
 import { GLOBAL } from '@phantom-agent-sdk/backend';
 import { CLIENT_ID, TELEGRAM_STARTER } from './assistant.js';
+import { STREAM_MODES, type TelegramStream } from './watch.js';
 
 interface Cmd { command: string; description: string }
 
@@ -43,6 +44,7 @@ export const MENU: Record<TelegramMode, Cmd[]> = {
     { command: 'projects', description: 'List or switch projects' },
     { command: 'sessions', description: 'List or switch sessions' },
     { command: 'stop', description: 'Stop the assistant' },
+    { command: 'stream', description: 'What streams here: on, all, or off' },
     { command: 'status', description: 'Server, project and session overview' },
     { command: 'presets', description: 'List or apply model presets' },
     { command: 'tokens', description: 'Token usage by model' },
@@ -59,6 +61,7 @@ export const MENU: Record<TelegramMode, Cmd[]> = {
     { command: 'auto_push', description: 'Push this session to base' },
     { command: 'auto_pull', description: 'Pull base into this session' },
     { command: 'stop', description: 'Stop the running coding session' },
+    { command: 'stream', description: 'What streams here: on, all, or off' },
     { command: 'status', description: 'Server, session and what\'s running' },
     { command: 'presets', description: 'List or apply model presets' },
     { command: 'tokens', description: 'Token usage by model' },
@@ -424,6 +427,21 @@ export async function handleCommand(
       return;
     }
 
+    case 'stream': {
+      // /stream — what of the session this chat is on streams in:
+      //   on   every turn's reply, whoever drives it (the default)
+      //   all  the same, plus a message typed elsewhere above its reply
+      //   off  only replies to what this chat sent
+      if (arg === undefined) { await reply(`📡 Stream: ${bot.stream} — /stream on, all or off`); return; }
+      const mode = arg.toLowerCase();
+      if (!(STREAM_MODES as readonly string[]).includes(mode)) { await reply('⚠️ /stream on, all or off'); return; }
+      await telegram.state.setStream(chatId, mode as TelegramStream);
+      await reply(mode === 'on' ? '📡 Streaming this session: every turn, whoever drives it.'
+        : mode === 'all' ? '📡 Streaming this session: every turn, with messages typed elsewhere.'
+        : '📡 Streaming off: only replies to what you send here.');
+      return;
+    }
+
     case 'update': {
       await telegram.upgradeChecker.manualCheck(client, chatId);
       return;
@@ -573,6 +591,7 @@ const HELP = [
   '/auto_push — Push this session to base',
   '/auto_pull — Pull base into this session',
   '/stop — Stop the assistant or active coding session (mode-aware)',
+  '/stream — What of this session streams here: on (every turn), all (with messages typed elsewhere), off (only your own)',
   '/stop 2 — Stop session 2',
   '/stop all — Stop every running session',
   '',
