@@ -32,7 +32,7 @@ export type Part =
       output?: unknown; error?: string;
       startedAt: number; endedAt?: number;
       /** Still running where it always ran — the session — after this window
-       *  handed the turn off; the api writes its result, the record redraws it. */
+       *  handed the turn off; its result comes down the feed from the api. */
       handedOff?: boolean;
     }
   | { kind: 'error'; id: string; message: string };
@@ -125,7 +125,7 @@ export function applyPart(turn: Part[], part: StreamPart, now = Date.now()): Par
       const env = part.output as { ok?: boolean; error?: { code?: string; message?: string } } | undefined;
       const failed = env?.ok === false;
       return replace(i, {
-        ...existing, input: part.input, output: part.output, endedAt: now,
+        ...existing, input: part.input, output: part.output, endedAt: now, handedOff: undefined,
         status: failed ? 'error' : 'ok',
         error: failed ? `${env?.error?.code ?? 'error'}: ${env?.error?.message ?? ''}` : undefined,
       });

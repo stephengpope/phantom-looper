@@ -11,7 +11,7 @@
 // every session hears its own "someone else touched me" news live. Only the
 // session on screen repaints — the store's fold paints the active id alone —
 // so a background feed costs its connection and its parts, never a redraw.
-import { FLUSH_MS } from './sessions.js';
+import { FLUSH_MS, activeHold } from './sessions.js';
 import { AUTO_PUSH_STEPS } from '../phantom-looper/agents/assistant/gitSteps.js';
 import { followStream, type Stream } from './follow.js';
 import type { SessionStore, LoadedSession } from './sessions.js';
@@ -57,6 +57,9 @@ export class SessionFeed {
   private ended = false;
   /** The dead holder this window already told the person about. */
   private diedOn: string | null = null;
+  /** A record that moved while a turn this window did not see whole was in
+   *  progress: read once the hold is released, at this stamp. */
+  private owed: string | null = null;
 
   constructor(
     private stream: Stream,
@@ -96,6 +99,8 @@ export class SessionFeed {
         this.flush();
         this.whole = true;
         this.ended = false;
+        // Seen from its start: nothing of it is missed, so nothing is owed.
+        this.owed = null;
         this.store.remoteStart(this.sessionId, String(rec.message ?? ''));
         return;
       case 'part': {
@@ -145,19 +150,18 @@ export class SessionFeed {
       case 'transcript': {
         // Never our own upload: the server does not echo a client its own
         // events (the feed route's rule), so every record here is someone
-        // else's work. A turn this window has watched from its start IS the
-        // record as it lands — mid-turn (the driver's message, then the
-        // api's tool results, each a write) and at its end alike — so the
-        // screen is kept and only the stamp and totals move: a redraw from
-        // a record whose last call has no result yet would paint that call
-        // as interrupted under the very row still streaming. A record that
-        // moved outside what was watched whole (joined mid-turn; a hand-off
-        // that left the api writing what this window never saw) is read and
-        // redrawn. `whole` is earned by the next turn-start once a watched
-        // turn has ended and landed.
-        const keep = this.whole;
+        // else's work. WHILE A TURN RUNS, THE STREAM IS THE SCREEN: the feed
+        // carries every part of it, whoever produced it (the api relays the
+        // result of a call whose caller left), so a record write mid-turn
+        // moves the stamp and the totals and nothing else — a redraw from a
+        // record whose last call has no result yet would paint that call
+        // interrupted under the very row still streaming. A turn this
+        // window did not see whole is read once its hold is released.
+        const stamp = String(rec.updated_at ?? '');
+        const held = activeHold(this.store.get(this.sessionId)) !== null;
+        if (!this.whole && held) { this.owed = stamp; await this.hooks.onRecordLanded(stamp, true); return; }
         if (this.ended) { this.whole = false; this.ended = false; }
-        await this.hooks.onRecordLanded(String(rec.updated_at ?? ''), keep);
+        await this.hooks.onRecordLanded(stamp, this.whole || held);
         return;
       }
       case 'lock': {
@@ -166,6 +170,8 @@ export class SessionFeed {
         // label (a hostname).
         if (!rec.locked) {
           this.store.setHeld(this.sessionId, null);
+          // The turn is over: a record this window owes itself a read of is read now.
+          if (this.owed) { const stamp = this.owed; this.owed = null; await this.hooks.onRecordLanded(stamp, false); }
           // A hold that ran out on its own is a turn that died there — not
           // one that ended. Said once, when this window first learns it.
           if (rec.died_on && this.diedOn !== rec.died_on) {

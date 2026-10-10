@@ -18,7 +18,7 @@ import type { SessionRow, ProjectRow } from '../../storage/schema.js';
 import { TOOLS, type FileTools, type ToolCtx } from '../../tools/registry.js';
 import { ToolError } from '../../tools/envelope.js';
 import { ok, err } from '../HttpApi.js';
-import { serverToolResultLine, TOOL_CALL_HEADER } from '@phantom-agent-sdk/client';
+import { TOOL_CALL_HEADER } from '@phantom-agent-sdk/client';
 import type { PhantomBackend } from '../../PhantomBackend.js';
 import { SESSION_HEADER } from '../../agents/sessionHeader.js';
 import { fileTools } from './fs.js';
@@ -126,7 +126,7 @@ export function toolRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         // a hang-up by the holder): a cut call has no result, and the driver
         // writes the placeholder for it.
         const written = toolCallId && !abort.signal.aborted
-          ? await ctx.toolCalls.record(session.id, serverToolResultLine({ toolCallId, toolName: def.name }, envelope))
+          ? await ctx.toolCalls.record(session.id, client, { toolCallId, toolName: def.name, input: req.body ?? {} }, envelope)
           : null;
         end();
         return reply.code(status).send(written ? { ...envelope, record: written } : envelope);

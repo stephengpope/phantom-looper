@@ -69,7 +69,9 @@ export class Turns {
     if (!runner) return 'no_runner';
     const expires = await this.sessions.transferLock(session.id, from, runner.id, runner.name, await this.#ttl(project));
     if (!expires) return 'lost';
-    this.events.publish(session.id, from, { event: 'lock', locked: true, by: runner.id, label: runner.name,
+    // Published as the NEW holder: the feed never echoes a client its own
+    // events, and the driver that let go must hear who holds it now.
+    this.events.publish(session.id, runner.id, { event: 'lock', locked: true, by: runner.id, label: runner.name,
       agent: session.agent ?? null, expires_at: expires.toISOString() });
     const open = this.toolCalls.inFlight(session.id);
     if (open) log.info({ session: session.id, runner: runner.name, open }, 'hand-off waits for the tool calls in flight');

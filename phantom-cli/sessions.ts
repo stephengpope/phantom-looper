@@ -91,9 +91,9 @@ export interface LoadedSession {
   caption: string | null;
   /** Finished (or failed) while you were looking somewhere else. */
   unseen: boolean;
-  /** The turn this window ran was handed to a session runner (its name): the
-   *  open tool calls are the api's to finish, and the record's next landing
-   *  redraws this pane as "continued on <runner>". Cleared by that redraw. */
+  /** The turn this window ran was handed to a session runner (its name): its
+   *  open tool calls are the api's to finish and stay open on screen; their
+   *  results come down the feed as parts, like anyone else's. */
   handedOffTo: string | null;
   /** An agent's question about THIS session (the coding agent's "enter code
    *  mode?"), parked here — not on the window — so it shows only while this
@@ -343,6 +343,7 @@ export class SessionStore {
     if (ran) {
       entry.flushParts();
       const rest = finalize(entry.turn, Date.now(), { handedOffTo: entry.handedOffTo });
+      entry.handedOffTo = null;
       entry.turn = [];
       if (entry.startedAt) {
         const endedAt = Date.now();
@@ -514,26 +515,6 @@ export class SessionStore {
     this.notify();
   }
 
-  /** The results of the calls this window left open at a hand-off, as the
-   *  api wrote them to the record: filled into those rows and nothing else
-   *  — the rest of the turn streams in over the feed. Once every such row
-   *  has its result, the hand-off is over for this pane. */
-  fillHandedOff(id: string, results: Map<string, unknown>): void {
-    const entry = this.get(id);
-    if (!entry?.handedOffTo) return;
-    const now = Date.now();
-    entry.done = entry.done.map((part) => {
-      if (part.kind !== 'tool' || !part.handedOff || !results.has(part.id)) return part;
-      const output = results.get(part.id);
-      const env = output as { ok?: boolean; error?: { code?: string; message?: string } } | undefined;
-      const failed = env?.ok === false;
-      return { ...part, handedOff: false, output, endedAt: now, status: failed ? 'error' as const : 'ok' as const,
-        error: failed ? `${env?.error?.code ?? 'error'}: ${env?.error?.message ?? ''}` : undefined };
-    });
-    if (!entry.done.some((part) => part.kind === 'tool' && part.handedOff)) entry.handedOffTo = null;
-    this.notify();
-  }
-
   /** The feed said who holds the session (or that nobody does). */
   setHeld(id: string, held: LoadedSession['held']): void {
     const entry = this.get(id);
@@ -644,6 +625,14 @@ export class SessionStore {
     let turn = entry.turn;
     let tokens = entry.tokens;
     for (const part of parts) {
+      // A result for a call this window left open at a hand-off: that row
+      // is already among the finished ones (the turn settled here), and the
+      // api relays the result down the feed. It lands on its row there.
+      if (part.type === 'tool-result') {
+        const id = (part as { toolCallId: string }).toolCallId;
+        const at = entry.done.findIndex((done) => done.kind === 'tool' && done.id === id);
+        if (at >= 0) { entry.done = entry.done.map((done, i) => (i === at ? applyPart([done], part)[0]! : done)); continue; }
+      }
       turn = applyPart(turn, part);
       tokens = applyTokens(tokens, part);
     }
