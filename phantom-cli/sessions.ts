@@ -270,7 +270,10 @@ export class SessionStore {
         flush();
         if (entry.syncStamp === now) return;
         if (added && entry.syncStamp === from) {
-          entry.done = [...entry.done, ...messagesToParts([...added])];
+          // The server wrote these at turn-start, BEFORE the words this
+          // window drew when enter landed (say) — so they go above them.
+          const at = entry.turnOpen ? this.sentWordsStart(entry) : entry.done.length;
+          entry.done = [...entry.done.slice(0, at), ...messagesToParts([...added]), ...entry.done.slice(at)];
           entry.syncStamp = now;
           this.notify();
           return;
@@ -329,6 +332,14 @@ export class SessionStore {
       }
     }
     entry.done = done;
+  }
+
+  /** Where the words `say` drew for the open turn begin: the trailing run of
+   *  user lines — nothing else lands in `done` between enter and turn-start. */
+  private sentWordsStart(entry: LoadedSession): number {
+    let at = entry.done.length;
+    while (at > 0 && entry.done[at - 1]!.kind === 'user') at--;
+    return at;
   }
 
   /** The user's words, drawn where they were sent. */
