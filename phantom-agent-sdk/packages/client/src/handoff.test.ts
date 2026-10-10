@@ -196,8 +196,10 @@ test('8. disconnect mid tool call: handoffNow takes it, the loop is cut, nothing
   input.tools = {
     look: tool({
       description: 'slow', inputSchema: jsonSchema<{ at: string }>({ type: 'object', properties: { at: { type: 'string' } } }),
-      execute: (_args, options) => new Promise((resolve) => {
-        options?.abortSignal?.addEventListener('abort', () => { toolAborted = true; resolve({ cut: true }); });
+      // A real server tool is a fetch: cut, it REJECTS with the abort — which
+      // the AI SDK reports as a tool-error part.
+      execute: (_args, options) => new Promise((_resolve, reject) => {
+        options?.abortSignal?.addEventListener('abort', () => { toolAborted = true; reject(new Error('aborted')); });
         setTimeout(() => disconnect?.(), 20);   // the person disconnects while the tool runs
       }),
     }),
