@@ -43,7 +43,7 @@ export interface RunnerView extends RunnerRow { online: boolean; workspaces: num
   /** What it runs (its hello): workspaces, turns, or both. */
   sessions: boolean; clients: boolean }
 
-/** A runner's kinds off its facts; a row from before the split ran sessions. */
+/** What a runner runs, off its facts; a row from before the split ran sessions. */
 export const runsSessions = (facts: { sessions?: boolean }): boolean => facts.sessions ?? true;
 export const runsClients = (facts: { clients?: boolean }): boolean => facts.clients ?? false;
 

@@ -253,7 +253,7 @@ export class Runner {
   }
 
   async #run(job: Job, entry: { cancel?: () => void }): Promise<void> {
-    // A job for the kind this runner is not: placement never sends one, so
+    // A job for what this runner does not run: placement never sends one, so
     // this is a bug said out loud, not a condition handled.
     if (job.type === 'turn' ? !this.opts.clients : !this.opts.sessions) {
       throw new Error(`this runner runs ${this.opts.sessions ? 'sessions' : 'clients'} only — it was sent a ${job.type} job`);

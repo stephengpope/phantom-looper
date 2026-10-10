@@ -1,7 +1,7 @@
 // The tool routes — one surface for every tool an agent can call, off the
 // registry (tools/registry.ts):
 //
-//   POST /sessions/:id/turn-start         what an agent of that kind has on that
+//   POST /sessions/:id/turn-start         what an agent of that type has on that
 //                                        session right now — a client builds
 //                                        its tools from this and nothing else
 //   POST /tools/:name                    run one; the session travels in a
