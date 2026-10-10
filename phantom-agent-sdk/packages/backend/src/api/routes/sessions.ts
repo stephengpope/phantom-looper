@@ -279,7 +279,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         actingFor: { organizationId: who?.organizationId ?? project.organizationId, ...(userId ? { userId } : {}) } });
       if (placed === 'no_runner') return reply.code(409).send(err('no_runner', `no session runner online can drive a '${session.agent}' agent for you — nothing changed`, true));
       if (placed === 'lost') return reply.code(409).send(err('session_not_held', 'the hold moved before the hand-off — nothing changed'));
-      return ok({ runner: placed.runner });
+      return ok(placed);
     });
 
   // Ask whoever drives this session's turn to hand it to a session runner:

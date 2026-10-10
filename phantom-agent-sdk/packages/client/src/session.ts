@@ -181,6 +181,21 @@ export class Session implements SessionInfo {
     return added;
   }
 
+  /** A record line the server wrote for this turn (a server tool's result):
+   *  filed in the record and the conversation as if this client wrote it. */
+  adopt(written: { line: TranscriptLine; lines: number; updated_at: string }): void {
+    this.record.adopt(written);
+    if (written.line.type === 'message') this.#messages.push(written.line.message);
+  }
+
+  /** Read what others wrote since this copy's count (a server tool's result
+   *  this turn never heard back about): the lines gained, filed. */
+  async catchUp(signal?: AbortSignal): Promise<TranscriptLine[]> {
+    const more = await this.record.catchUp(signal);
+    for (const line of more) if (line.type === 'message') this.#messages.push(line.message);
+    return more;
+  }
+
   /** The person received the last reply only up to `text`: the conversation
    *  held here is cut now; the record line follows under the next hold. */
   cutLastReply(text: string): void { cutLastAssistantMessage(this.#messages, text); }

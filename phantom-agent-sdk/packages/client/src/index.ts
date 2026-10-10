@@ -16,7 +16,9 @@ export { PhantomError, isPhantomError, SDK_ERROR_CODES, type ErrorCode, type Sdk
 export type { RetryPolicy } from './model/retry.js';
 
 // Tools only the app can serve (`agent.addToolKit(kit)`).
-export type { ToolKit, ToolKitContext, BuiltTools } from './toolkit.js';
+export { TOOL_CALL_HEADER, type ToolKit, type ToolKitContext, type BuiltTools } from './toolkit.js';
+// A server tool's result as its record line — the backend writes it when it ran the tool.
+export { serverToolResultLine } from './messages.js';
 
 // A billed model for an app's one-shot call (a title, a commit message).
 export { billedModel, type Billing, type ModelHooks } from './model/languageModel.js';

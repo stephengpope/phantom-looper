@@ -5,6 +5,7 @@
 // provider signature included, which Anthropic requires to replay a
 // tool-use step.
 import type { AssistantContent, AssistantModelMessage, Tool, ToolModelMessage, ToolResultPart } from 'ai';
+import { messageLine, type MessageLine } from './transcript.js';
 
 type ContentPart = {
   type: string; text?: string; kind?: string; providerMetadata?: Record<string, unknown>;
@@ -64,6 +65,18 @@ export async function toolResultMessage(
       : { type: 'json', value: (part.output === undefined ? null : part.output) as never };
   }
   return { role: 'tool', content: [{ type: 'tool-result', toolCallId: part.toolCallId, toolName: part.toolName, output }] };
+}
+
+/** A SERVER tool's result as its record line — the one shaping for both
+ *  sides: the client's kit (toModelOutput) and the backend, which writes
+ *  the line itself when it ran the tool (api/routes/tools.ts). The envelope
+ *  IS the result the model reads; an image read reaches it as an image. */
+export function serverToolResultLine(call: { toolCallId: string; toolName: string }, envelope: unknown): MessageLine {
+  const image = (envelope as { data?: { image?: { media_type: string; base64: string } } })?.data?.image;
+  const output: ToolResultPart['output'] = image
+    ? { type: 'content', value: [{ type: 'file', mediaType: image.media_type, data: { type: 'data', data: image.base64 } } as never] }
+    : { type: 'json', value: envelope as never };
+  return messageLine({ role: 'tool', content: [{ type: 'tool-result', toolCallId: call.toolCallId, toolName: call.toolName, output }] });
 }
 
 /** What a tool call whose result never arrived says in the record. The next

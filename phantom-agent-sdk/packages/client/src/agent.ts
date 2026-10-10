@@ -100,6 +100,11 @@ export abstract class Agent {
   #handoff = false;
   /** The disconnect waiting to be answered, if one is. */
   #disconnecting: { resolve(answer: Disconnected): void } | null = null;
+  /** The running turn's ear for a disconnect (turn.ts onDisconnect). */
+  readonly #disconnectListeners = new Set<() => void>();
+  /** A hand-off that already landed mid tool calls (handoffNow): the turn's
+   *  `handed_off` result then needs no second hand-off. */
+  #handedOffTo: HandoffTarget | null = null;
 
   /** @internal — through `resumeSession` / `create` only. */
   constructor({ backend, handlers, session }: AgentDeps) {
@@ -201,6 +206,7 @@ export abstract class Agent {
       if (this.#disconnecting) { const previous = this.#disconnecting; this.#disconnecting = { resolve: (answer) => { previous.resolve(answer); resolve(answer); } }; return; }
       this.#disconnecting = { resolve };
       this.#handoff = true;
+      for (const listener of [...this.#disconnectListeners]) listener();
     });
   }
 
@@ -291,6 +297,20 @@ export abstract class Agent {
             system: ready.system, tools: ready.tools, terminal: ready.terminal, history: this.session.messages, maxSteps: ready.model.maxSteps,
             opening: words,
             handoff: () => this.#handoff,
+            recordedByServer: ready.recordedByServer,
+            onDisconnect: (listener) => { this.#disconnectListeners.add(listener); return () => { this.#disconnectListeners.delete(listener); }; },
+            // Mid tool calls: this side's stream closes first (its hold is
+            // still its own), then the hold moves. Refused: the words go back
+            // and the feed reopens, the tools run on here.
+            handoffNow: async () => {
+              await Promise.all([feed.end(), this.#flushPartials()]);
+              const queue = this.#queue.drain();
+              const runner = await this.#tryHandoff(queue);
+              if (runner) { this.#handedOffTo = runner; return true; }
+              this.#queue.unsent(queue);
+              feed = openFeed([]);
+              return false;
+            },
             loopSignal: () => this.#nextSignal(),
             pending: () => this.#sent(),
             afterStop: () => (this.#keepQueue || this.#closed ? [] : this.#sent()),
@@ -316,6 +336,15 @@ export abstract class Agent {
           // whole, so this driver goes on from the same boundary with those
           // words — the hand-off cost nothing but the asking.
           while (result.outcome === 'handed_off') {
+            // Already gone, mid tool calls: the api finishes them and starts
+            // the runner; this turn is over here.
+            if (this.#handedOffTo) {
+              const runner = this.#handedOffTo;
+              this.#handedOffTo = null;
+              start.handedOff();
+              this.#emit('handed-off', { runner });
+              return result;
+            }
             const queue = this.#queue.drain();
             // Everything this driver still owes the record and the feed goes
             // out NOW, under its own hold — after the hand-off the hold is
@@ -418,7 +447,7 @@ export abstract class Agent {
    *  it now), plan mode, the model, the prompt as stored, the tools. Null when a stop
    *  landed meanwhile — nothing was sent, nothing recorded, the queue
    *  untouched. */
-  async #prepare(start: TurnStart & { recordMoved: boolean }, signal: AbortSignal): Promise<{ model: ResolvedModel; system: SystemModelMessage[]; tools: Record<string, Tool>; terminal: string[] } | null> {
+  async #prepare(start: TurnStart & { recordMoved: boolean }, signal: AbortSignal): Promise<{ model: ResolvedModel; system: SystemModelMessage[]; tools: Record<string, Tool>; terminal: string[]; recordedByServer: Set<string> } | null> {
     try {
       const gained = await this.#session.makeCurrent(start.recordMoved, signal);
       if (gained) this.#emit('reloaded', { messages: this.session.messages, from: gained.from, added: gained.added, now: this.session.transcriptUpdatedAt });
@@ -430,9 +459,15 @@ export abstract class Agent {
       const { messages: system, uncached } = systemMessages(systemPromptBlocks(stored), model.spec.provider);
       if (uncached) this.#handlers.onNotice({ type: 'cache', text: `${uncached} system prompt block(s) beyond the first ${CACHED_BLOCKS} are not cached on ${model.spec.provider}` });
       this.#kits.add(serverToolKit(start.tools));
-      const { tools, terminal } = await this.#kits.resolve({ backend: this.backend, sessionId: this.session.id, projectId: this.session.projectId,
-        workspaceId: this.session.workspaceId, readonly: () => this.session.planMode });
-      return { model, system, tools, terminal };
+      const { tools, terminal, recordedByServer } = await this.#kits.resolve({ backend: this.backend, sessionId: this.session.id, projectId: this.session.projectId,
+        workspaceId: this.session.workspaceId, readonly: () => this.session.planMode,
+        // A line the api wrote for this turn (a server tool's result): filed
+        // as this side's own; the screen hears it as a step.
+        recorded: (written) => {
+          this.#session.adopt(written);
+          this.#emit('step', { messages: written.line.type === 'message' ? [written.line.message] : [], usage: this.session.usage });
+        } });
+      return { model, system, tools, terminal, recordedByServer };
     } catch (error) {
       if (signal.aborted) return null;
       throw error;

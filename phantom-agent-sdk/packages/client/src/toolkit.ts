@@ -13,6 +13,11 @@
 import { jsonSchema, tool, type Tool } from 'ai';
 import type { BackendClient } from './backend.js';
 import type { PublishedTool } from './session.js';
+import type { TranscriptLine } from './transcript.js';
+
+/** The header a server tool call carries its call id in: the api writes the
+ *  result line under that id (api/routes/tools.ts). */
+export const TOOL_CALL_HEADER = 'x-phantom-tool-call';
 
 export interface ToolKitContext {
   backend: BackendClient;
@@ -21,6 +26,9 @@ export interface ToolKitContext {
   /** The workspace the session's tools open. */
   workspaceId: string | null;
   readonly: () => boolean;
+  /** The server wrote a record line for this turn (a server tool's result,
+   *  handed back with the answer): file it. */
+  recorded: (written: { line: TranscriptLine; lines: number; updated_at: string }) => void;
 }
 
 /** What a kit builds: its tools, and which of them change things. */
@@ -32,6 +40,10 @@ export interface BuiltTools {
    *  record is written, and the model is not called again (a verdict, a
    *  hand-off). Absent = none. */
   terminal?: readonly string[];
+  /** Names from `tools` whose results the SERVER writes to the record (it
+   *  ran them): the turn files what comes back and writes nothing itself.
+   *  Absent = the turn writes every result. */
+  recordedByServer?: readonly string[];
 }
 
 export interface ToolKit {
@@ -65,15 +77,17 @@ export class ToolKitSet {
 
   add(kit: ToolKit): void { this.kits.set(kit.name, kit); }
 
-  async resolve(ctx: ToolKitContext): Promise<{ tools: Record<string, Tool>; terminal: string[] }> {
+  async resolve(ctx: ToolKitContext): Promise<{ tools: Record<string, Tool>; terminal: string[]; recordedByServer: Set<string> }> {
     const tools: Record<string, Tool> = {};
     const terminal: string[] = [];
+    const recordedByServer = new Set<string>();
     for (const kit of this.kits.values()) {
       const built = await kit.build(ctx);
       Object.assign(tools, guardReadonly(built, ctx));
       terminal.push(...(built.terminal ?? []));
+      for (const name of built.recordedByServer ?? []) recordedByServer.add(name);
     }
-    return { tools, terminal };
+    return { tools, terminal, recordedByServer };
   }
 }
 
@@ -83,8 +97,11 @@ export class ToolKitSet {
  *  the server's word on which tools the agent has right now (a switched-off
  *  feature is a missing tool, a session with no files has no file tools)
  *  and what each one does. Each becomes a tool that POSTs back with the
- *  session header; the envelope IS the result — the model reads
- *  {ok:false, error:{code, message, retryable}} and self-corrects. */
+ *  session header and its call id; the envelope IS the result — the model
+ *  reads {ok:false, error:{code, message, retryable}} and self-corrects.
+ *  WHOEVER RUNS A TOOL WRITES ITS RESULT: the api ran it, so the api wrote
+ *  the result line and hands it back with the answer; this side files it
+ *  (ctx.recorded) and the turn writes nothing for it. */
 export function serverToolKit(listing: readonly PublishedTool[]): ToolKit {
   return {
     name: 'server',
@@ -94,7 +111,8 @@ export function serverToolKit(listing: readonly PublishedTool[]): ToolKit {
         out[def.name] = tool({
           description: def.description ?? def.summary,
           inputSchema: jsonSchema(def.input as never),
-          // Image reads reach the model as an image, not a JSON blob of base64.
+          // Image reads reach the model as an image, not a JSON blob of base64
+          // — the same shaping the api wrote to the record (serverToolResultLine).
           toModelOutput: ({ output }) => {
             const img = (output as { data?: { image?: { media_type: string; base64: string } } })?.data?.image;
             if (img) {
@@ -103,12 +121,19 @@ export function serverToolKit(listing: readonly PublishedTool[]): ToolKit {
             return { type: 'json', value: output as never };
           },
           // The abort signal rides into the request: an interrupt aborts it and
-          // the server stops what the tool was doing.
-          execute: (args: unknown, opts?: { abortSignal?: AbortSignal }) =>
-            ctx.backend.callRaw('POST', `/tools/${def.name}`, args ?? {}, { sessionId: ctx.sessionId, signal: opts?.abortSignal }),
+          // the server stops what the tool was doing. The answer carries the
+          // record line the api wrote (`record`), filed here, never shown to the model.
+          execute: async (args: unknown, opts?: { abortSignal?: AbortSignal; toolCallId?: string }) => {
+            const answer = await ctx.backend.callRaw<unknown>('POST', `/tools/${def.name}`, args ?? {},
+              { sessionId: ctx.sessionId, signal: opts?.abortSignal, headers: opts?.toolCallId ? { [TOOL_CALL_HEADER]: opts.toolCallId } : undefined });
+            const { record, ...envelope } = answer as { record?: { line: TranscriptLine; lines: number; updated_at: string } } & Record<string, unknown>;
+            if (record) ctx.recorded(record);
+            return envelope;
+          },
         });
       }
-      return Promise.resolve({ tools: out, mutating: listing.filter((tool) => tool.mutates).map((tool) => tool.name) });
+      return Promise.resolve({ tools: out, mutating: listing.filter((tool) => tool.mutates).map((tool) => tool.name),
+        recordedByServer: listing.map((tool) => tool.name) });
     },
   };
 }
