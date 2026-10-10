@@ -23,7 +23,7 @@ import type { TranscriptLine } from './transcript.js';
 
 const usage = { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 5, text: 5, reasoning: 0 } };
 const finish = (unified: 'stop' | 'tool-calls'): LanguageModelV4StreamPart =>
-  ({ type: 'finish', usage: usage as never, finishReason: { unified, raw: unified } });
+  ({ type: 'finish', usage: usage, finishReason: { unified, raw: unified } });
 
 /** One model answer as a v4 stream. */
 function answer(parts: LanguageModelV4StreamPart[]): ReadableStream<LanguageModelV4StreamPart> {
@@ -48,13 +48,13 @@ function mockModel(answers: LanguageModelV4StreamPart[][]): { model: LanguageMod
   const seen: ModelMessage[][] = [];
   const model = new MockLanguageModelV4({
     doStream: async (options) => {
-      seen.push(options.prompt as unknown as ModelMessage[]);
+      seen.push(options.prompt);
       const next = answers.shift();
       if (!next) throw new Error('the model was called more times than the test allows');
       return { stream: answer(next) };
     },
   });
-  return { model: model as unknown as LanguageModel, prompts: () => seen };
+  return { model: model, prompts: () => seen };
 }
 
 /** The one tool: answers `{ saw }`, and lets the test act while it runs. */
