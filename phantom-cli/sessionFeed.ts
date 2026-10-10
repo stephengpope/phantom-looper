@@ -145,9 +145,18 @@ export class SessionFeed {
       case 'transcript': {
         // Never our own upload: the server does not echo a client its own
         // events (the feed route's rule), so every record here is someone
-        // else's work.
-        const keep = this.whole && this.ended;
-        this.whole = false;          // the next turn earns it again
+        // else's work. A turn this window has watched from its start IS the
+        // record as it lands — mid-turn (the driver's message, then the
+        // api's tool results, each a write) and at its end alike — so the
+        // screen is kept and only the stamp and totals move: a redraw from
+        // a record whose last call has no result yet would paint that call
+        // as interrupted under the very row still streaming. A record that
+        // moved outside what was watched whole (joined mid-turn; a hand-off
+        // that left the api writing what this window never saw) is read and
+        // redrawn. `whole` is earned by the next turn-start once a watched
+        // turn has ended and landed.
+        const keep = this.whole;
+        if (this.ended) { this.whole = false; this.ended = false; }
         await this.hooks.onRecordLanded(String(rec.updated_at ?? ''), keep);
         return;
       }
