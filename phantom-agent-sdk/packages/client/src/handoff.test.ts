@@ -202,9 +202,12 @@ test('8. disconnect mid tool call: handoffNow takes it, the loop is cut, nothing
       }),
     }),
   };
+  const seen: string[] = [];
+  input.onPart = (part) => { seen.push(part.type); };
   const result = await runTurn(input);
   assert.equal(result.outcome, 'handed_off');
   assert.ok(toolAborted, 'the open call was cut with the loop');
+  assert.ok(!seen.includes('tool-error') && !seen.includes('error') && !seen.includes('abort'), `the cut's residue reached the app: ${seen.join(',')}`);
   assert.equal(prompts().length, 1);
   const roles = lines.filter((line) => line.type === 'message').map((line) => line.message.role);
   assert.deepEqual(roles, ['user', 'assistant'], 'the call is recorded; its result is the api\'s to write');

@@ -321,6 +321,11 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
 
     try {
       for await (const raw of result.fullStream) {
+        // Handed off mid tool calls: what the cut stream still emits — the
+        // aborted calls reporting as tool errors, the abort itself — is the
+        // cut's residue, not the turn's. Nobody hears it; the api finishes
+        // those calls and the record carries their real results.
+        if (handedOffMidTools) continue;
         const part = raw as KnownPart;
         switch (part.type) {
           case 'text-delta': step.text += (part as { text: string }).text; break;
