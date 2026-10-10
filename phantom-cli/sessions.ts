@@ -342,7 +342,7 @@ export class SessionStore {
     entry.caption = null;
     if (ran) {
       entry.flushParts();
-      const rest = finalize(entry.turn, Date.now(), { keepOpenTools: entry.handedOffTo !== null });
+      const rest = finalize(entry.turn, Date.now(), { handedOffTo: entry.handedOffTo });
       entry.turn = [];
       if (entry.startedAt) {
         const endedAt = Date.now();

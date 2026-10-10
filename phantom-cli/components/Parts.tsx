@@ -181,7 +181,7 @@ function ToolRow({ part, width, expanded, maxRows, compact = false }: {
       <Box marginTop={1}>
         <Box flexShrink={0}>{glyph}<Text> </Text></Box>
         <Text bold={part.status === 'pending' || part.status === 'running'} dimColor={part.status === 'ok'}
-          color={part.status === 'error' ? 'red' : undefined} wrap="truncate">{part.name}</Text>
+          color={part.status === 'error' ? 'red' : undefined} wrap="truncate">{part.name}{part.finishingOn ? ` · finishing on ${part.finishingOn}` : ''}</Text>
       </Box>
     );
   }
@@ -213,7 +213,8 @@ function ToolRow({ part, width, expanded, maxRows, compact = false }: {
         {/* One Text node: the name and summary flow as a paragraph, wrapping
             between words — two siblings let yoga shrink the name mid-word
             ("kanba/n") in a narrow pane like the Assistant's. */}
-        <Text><Text bold>{part.name}</Text><Text dimColor> {cmd.lines.join('\n')}</Text></Text>
+        <Text><Text bold>{part.name}</Text><Text dimColor> {cmd.lines.join('\n')}</Text>
+          {part.finishingOn && <Text color="yellow"> · finishing on {part.finishingOn}</Text>}</Text>
       </Box>
       {cmd.omitted > 0 && <Box marginLeft={2}><Text dimColor>{moreLine(cmd.omitted)}</Text></Box>}
       {out != null && (

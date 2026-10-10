@@ -220,7 +220,7 @@ export class Runners {
   async activeWorkspaces(): Promise<string[]> {
     const lists = await Promise.all([
       this.local.activeWorkspaces().catch(() => [] as string[]),
-      ...[...this.#remote.values()].map((host) => host.activeWorkspaces()),
+      ...this.onlineRunners().map((host) => host.activeWorkspaces()),
     ]);
     return lists.flat();
   }
