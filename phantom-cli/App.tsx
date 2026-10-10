@@ -40,7 +40,7 @@ import { Text } from './components/Text.js';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { Tool } from 'ai';
 import type { BackendClient } from '@phantom-agent-sdk/client';
-import { phaseLabel, tokenCount, formatTokens, cachePct } from './state.js';
+import { phaseLabel, tokenCount, formatTokens, formatTokensOut, cachePct } from './state.js';
 import { activeHold } from './sessions.js';
 import { COMMANDS, complete, matches } from './commands.js';
 import { quiet, type Api } from './request.js';
@@ -678,11 +678,15 @@ export function App({
   const modelMark = rawModel && provider && rawModel.startsWith(`${provider}-`)
     ? rawModel.slice(provider.length + 1) : rawModel;
   // The context meter — the last model call's input tokens (= current context
-  // window usage) with the cache hit rate. Shows how full the window is right
-  // now. Hidden until the first step lands (lastInput is 0 before that).
+  // window usage) with the cache hit rate. Updates each step. The output
+  // count rides alongside it during a running turn so something animates.
   const pct = session ? cachePct(session.usage.input, session.usage.cacheRead, session.usage.cacheWrite) : null;
+  const tokensOut = session && (session.busy || session.remoteBusy)
+    ? tokenCount(session.tokens) : 0;
   const contextMeter = session && session.lastInput > 0
-    ? formatTokens(session.lastInput) + (pct != null ? ` (${pct}%)` : '') : undefined;
+    ? formatTokens(session.lastInput) + (pct != null ? ` (${pct}%)` : '')
+      + (tokensOut > 0 ? ` ${formatTokensOut(tokensOut)}` : '')
+    : tokensOut > 0 ? formatTokensOut(tokensOut) : undefined;
   // The session's name (from /rename or the auto-title); a fresh session
   // without one yet shows nothing here. Kept current by /rename and the
   // staleness GET (window.ts), so the line moves the moment the name lands.

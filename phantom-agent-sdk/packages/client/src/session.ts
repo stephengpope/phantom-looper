@@ -44,6 +44,8 @@ export interface SessionInfo {
   readonly messages: readonly ModelMessage[];
   /** The tokens the record accounts for, whoever wrote them. */
   readonly usage: Readonly<TokenTotals>;
+  /** The last model call's input tokens — the current context window usage. */
+  readonly lastInput: number;
   /** The server's last-changed mark for the record copy held here — what
    *  `GET /sessions/:id` answers as transcript_updated_at when the copy is
    *  current. Moves with every line this agent writes and every catch-up. */
@@ -94,6 +96,14 @@ export class Session implements SessionInfo {
   get row(): Readonly<SessionRow> { return this.#row; }
   get messages(): readonly ModelMessage[] { return this.#messages; }
   get usage(): Readonly<TokenTotals> { return this.record.usage; }
+  /** The last model call's input tokens — the current context window usage. */
+  get lastInput(): number {
+    for (let i = this.record.lines.length - 1; i >= 0; i--) {
+      const line = this.record.lines[i]!;
+      if (line.type === 'usage') return line.input;
+    }
+    return 0;
+  }
   get transcriptUpdatedAt(): string | null { return this.record.stamp; }
 
   /** Plan mode as the server says it: turn-start's answer, or the session

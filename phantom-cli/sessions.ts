@@ -197,7 +197,7 @@ export class SessionStore {
       remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS,
       usage: { ...fresh.agent.session.usage }, caption: null,
       unseen: false, handedOffTo: null, ask: null, lastMessageAt: fresh.agent.session.messages.length ? Date.now() : 0, addedAt: ++this.seq,
-      lastInput: 0, workState: null, draft: fresh.draft ?? '',
+      lastInput: fresh.agent.session.lastInput, workState: null, draft: fresh.draft ?? '',
       flushParts: () => undefined, unwire: () => undefined,
     };
     entry.unwire = this.wire(entry);
