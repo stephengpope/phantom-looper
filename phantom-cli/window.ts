@@ -650,18 +650,24 @@ export class WindowStore {
     const transcript = await this.api('GET', `/sessions/${id}/transcript`) as
       { data: string | null; updated_at?: string | null };
     const lines = parseLines(transcript.data ?? '');
+    // After a hand-off, the only thing this window is owed is the results of
+    // the calls it left open — the api wrote them. Those rows are filled
+    // from the record; nothing is redrawn, since the turn goes on streaming
+    // in over the feed and a redraw mid-turn would paint its open call as
+    // interrupted.
+    if (cur.handedOffTo) {
+      this.sessions.fillHandedOff(id, toolResultsOf(lines));
+      this.sessions.reseat(id, null, transcript.updated_at ?? server, usageTotals(lines));
+      return;
+    }
     // keepScreen: the feed showed us this whole turn as it happened, so the
     // record brings the stamp and the totals and the screen keeps what it
     // drew — richer than a replay, and no repaint to jump through.
-    // After a hand-off the screen is never kept: the api wrote the results
-    // of the calls this window left open, and only the record has them.
-    const handedOffTo = cur.handedOffTo;
-    this.sessions.reseat(id, keepScreen && !handedOffTo ? null : [
+    this.sessions.reseat(id, keepScreen ? null : [
       ...cur.done.slice(0, 2),
-      { kind: 'note', id: nextId('note'), text: handedOffTo ? `continued on ${handedOffTo}` : 'refreshed — this session moved forward elsewhere' } as Part,
+      { kind: 'note', id: nextId('note'), text: 'refreshed — this session moved forward elsewhere' } as Part,
       ...messagesToParts(conversationFrom(lines)),
     ], transcript.updated_at ?? server, usageTotals(lines));
-    if (handedOffTo) this.sessions.clearHandedOff(id);
   };
 
   // ── what is on screen ─────────────────────────────────────────────────────
@@ -2147,3 +2153,19 @@ export class WindowStore {
 }
 
 export type { LoadedSession };
+
+/** The tool results a record holds, by call id, as the pane's tool rows
+ *  take them: the envelope the model read (a json output), or an error text. */
+function toolResultsOf(lines: ReturnType<typeof parseLines>): Map<string, unknown> {
+  const out = new Map<string, unknown>();
+  for (const message of conversationFrom(lines)) {
+    if (message.role !== 'tool') continue;
+    for (const part of message.content) {
+      if (part.type !== 'tool-result') continue;
+      const output = part.output as { type: string; value?: unknown };
+      out.set(part.toolCallId, output.type === 'json' ? output.value
+        : output.type === 'error-text' ? { ok: false, error: { code: 'error', message: String(output.value ?? '') } } : output.value);
+    }
+  }
+  return out;
+}

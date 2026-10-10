@@ -514,10 +514,24 @@ export class SessionStore {
     this.notify();
   }
 
-  /** The record landed after a hand-off: the pane was redrawn from it. */
-  clearHandedOff(id: string): void {
+  /** The results of the calls this window left open at a hand-off, as the
+   *  api wrote them to the record: filled into those rows and nothing else
+   *  — the rest of the turn streams in over the feed. Once every such row
+   *  has its result, the hand-off is over for this pane. */
+  fillHandedOff(id: string, results: Map<string, unknown>): void {
     const entry = this.get(id);
-    if (entry) entry.handedOffTo = null;
+    if (!entry?.handedOffTo) return;
+    const now = Date.now();
+    entry.done = entry.done.map((part) => {
+      if (part.kind !== 'tool' || !part.handedOff || !results.has(part.id)) return part;
+      const output = results.get(part.id);
+      const env = output as { ok?: boolean; error?: { code?: string; message?: string } } | undefined;
+      const failed = env?.ok === false;
+      return { ...part, handedOff: false, output, endedAt: now, status: failed ? 'error' as const : 'ok' as const,
+        error: failed ? `${env?.error?.code ?? 'error'}: ${env?.error?.message ?? ''}` : undefined };
+    });
+    if (!entry.done.some((part) => part.kind === 'tool' && part.handedOff)) entry.handedOffTo = null;
+    this.notify();
   }
 
   /** The feed said who holds the session (or that nobody does). */
