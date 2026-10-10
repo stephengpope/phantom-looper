@@ -21,7 +21,7 @@ import type { Settings } from '../storage/Settings.js';
 import type { AgentDatabases } from '../storage/AgentDatabases.js';
 import * as checkoutPool from './CheckoutPool.js';
 import type { ContainerPlan, ContainerState, WorkspaceHost } from './WorkspaceHost.js';
-import type { SessionRunners } from '../host/SessionRunners.js';
+import type { Runners } from '../host/Runners.js';
 import { containerName } from './LocalHost.js';
 import { logger, errStr } from '../lib/log.js';
 import { scopeOf } from '../lib/scopes.js';
@@ -127,7 +127,7 @@ export interface ContainerOpts {
 
 export class SessionContainers {
   constructor(
-    private hosts: SessionRunners,
+    private hosts: Runners,
     private opts: ContainerOpts = {},
   ) {}
 

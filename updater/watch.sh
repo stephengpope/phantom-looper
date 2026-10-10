@@ -18,11 +18,11 @@ set -u
 TRIGGER_DIR="${TRIGGER_DIR:-/trigger}"
 BACKEND_DIR="${BACKEND_DIR:-/opt/phantom-looper}"
 REQUEST="$TRIGGER_DIR/request"
-# Per stack (a session runner on a server's daemon sets its own), so the api
+# Per stack (a runners stack on a server's daemon sets its own), so the api
 # follows its helper and never another stack's.
 HELPER_NAME="${HELPER_NAME:-phantom-update-run}"
 # Which directory of the image holds this stack's files: the server's root,
-# a session runner's session-runner/.
+# a runners stack's runners/.
 HOST_FILES_DIR="${HOST_FILES_DIR:-/host-files}"
 
 # The api runs as `node`; a fresh named volume is root-owned. Open it up so

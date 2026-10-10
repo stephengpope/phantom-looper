@@ -1,4 +1,4 @@
-// SessionRunner — the host process: a box with Docker and a workspace volume
+// Runner — the host process: a box with Docker and a workspace volume
 // that connects OUT to a backend and runs its workspaces. The same backend
 // image, this entrypoint instead of the API's; no database, no settings, no
 // secrets of its own — every job carries what it needs, and the host trusts
@@ -32,7 +32,7 @@ import { sidecarApply } from '../upgrade/sidecar.js';
 import type { UpdateEvent } from '@phantom-agent-sdk/client';
 import { logger, errStr } from '../lib/log.js';
 
-const log = logger('session-runner');
+const log = logger('runner');
 
 /** The host's calls to the backend: local or one hop away. */
 const HOST_RETRY: RetryPolicy = { waitsS: [1, 2, 4, 8], budgetMs: 15_000, retryable: (status) => status === 408 || status === 429 || status >= 500 };
@@ -46,7 +46,12 @@ export type TurnAgents = Record<string, {
   kits?: Record<string, (args: Record<string, unknown>) => ToolKit>;
 }>;
 
-export interface SessionRunnerOptions {
+export interface RunnerOptions {
+  /** What this runner runs: sessions (workspaces and their containers —
+   *  Docker and a volume), clients (turns — nothing but the api), or both
+   *  on a small box. At least one. */
+  sessions: boolean;
+  clients: boolean;
   /** The backend's origin, e.g. https://phantom.example.com */
   origin: string;
   /** The service role key (a shared runner) or a user role key (their host). */
@@ -65,7 +70,7 @@ export interface SessionRunnerOptions {
   agents?: TurnAgents;
 }
 
-export class SessionRunner {
+export class Runner {
   readonly boot = newId();
   #backend: BackendClient;
   readonly #local: LocalHost;
@@ -81,7 +86,7 @@ export class SessionRunner {
   readonly #doneSet = new Set<string>();
   #stopped = false;
 
-  constructor(private readonly opts: SessionRunnerOptions) {
+  constructor(private readonly opts: RunnerOptions) {
     // One HTTPS/2 socket for everything, as the cli has: the backend's TLS,
     // its own CA when it runs one (BACKEND_CA). There is no other transport.
     const origin = new URL(opts.origin).origin;
@@ -99,7 +104,7 @@ export class SessionRunner {
   readonly #connection: BackendConnection;
   #client(credential: Credential): BackendClient {
     return new BackendClient({
-      url: `${new URL(this.opts.origin).origin}/api`, credential, clientId: `session-runner-${this.boot}`, label: this.opts.name,
+      url: `${new URL(this.opts.origin).origin}/api`, credential, clientId: `runner-${this.boot}`, label: this.opts.name,
       fetch: (input, init) => this.#connection.fetch(input, init), retry: { policy: HOST_RETRY, notice: (text) => log.warn(text) },
     });
   }
@@ -111,13 +116,23 @@ export class SessionRunner {
 
   /** From the environment — the compose service's one way in. `agents`: the
    *  app's classes, by type, for the turns this runner may drive. */
-  static fromEnv(env: NodeJS.ProcessEnv = process.env, extra: { agents?: TurnAgents } = {}): SessionRunner {
+  static fromEnv(env: NodeJS.ProcessEnv = process.env, extra: { agents?: TurnAgents } = {}): Runner {
     const origin = env.BACKEND_URL;
     const key = env.BACKEND_KEY;
     if (!origin) throw new Error('BACKEND_URL is not set — the backend this host connects to');
     if (!key) throw new Error('BACKEND_KEY is not set — the service role key (a shared runner) or your user role key (your host)');
+    const on = (value: string | undefined) => /^(1|on|true|yes)$/i.test(value ?? '');
+    const sessions = on(env.RUN_SESSIONS);
+    const clients = on(env.RUN_CLIENTS);
+    if (!sessions && !clients) throw new Error('RUN_SESSIONS or RUN_CLIENTS must be on — a runner runs sessions (workspaces), clients (turns), or both');
+    if (clients && !Object.keys(extra.agents ?? {}).length) throw new Error('RUN_CLIENTS is on but this runner was given no agents to drive');
+    // Caddy's root, when the backend signs with its own CA (BACKEND_TLS=
+    // internal): PEM text in BACKEND_CA. A PEM through a .env: its newlines
+    // may arrive as the two characters `\n`.
+    const certificateAuthority = env.BACKEND_CA ? Buffer.from(env.BACKEND_CA.replace(/\\n/g, '\n')) : undefined;
     const root = env.WORKSPACE_ROOT_PATH || '/workspaces';
-    return new SessionRunner({
+    return new Runner({
+      sessions, clients,
       origin, key,
       name: env.HOST_NAME || os.hostname(),
       paths: makePaths(root),
@@ -129,8 +144,7 @@ export class SessionRunner {
         diskQuota: env.DISK_QUOTA_URL || undefined,
         apiImage: env.API_IMAGE || undefined,
       },
-      // A PEM through a .env: its newlines may arrive as the two characters `\n`.
-      ...(env.BACKEND_CA ? { certificateAuthority: Buffer.from(env.BACKEND_CA.replace(/\\n/g, '\n')) } : {}),
+      ...(certificateAuthority ? { certificateAuthority } : {}),
       ...(env.UPDATE_TRIGGER_DIR ? { updateTriggerDir: env.UPDATE_TRIGGER_DIR } : {}),
       ...(env.HELPER_NAME ? { updateHelperName: env.HELPER_NAME } : {}),
       ...(extra.agents ? { agents: extra.agents } : {}),
@@ -158,27 +172,31 @@ export class SessionRunner {
         await new Promise((wake) => setTimeout(wake, wait));
       }
     }
-    await checkoutPool.bootCleanup(this.opts.paths);
-    await this.#local.retireOldContainers();
+    if (this.opts.sessions) {
+      await checkoutPool.bootCleanup(this.opts.paths);
+      await this.#local.retireOldContainers();
+    }
     const idFile = path.join(this.opts.paths.root, 'host.json');
     const persisted: { id?: string } = await fs.readFile(idFile, 'utf8').then((text) => JSON.parse(text) as { id?: string }, () => ({}));
     const facts: HostHello['facts'] = {
-      dockerVersion: await this.opts.docker.version().then((v) => String((v as { Version?: string }).Version ?? ''), () => undefined),
+      sessions: this.opts.sessions,
+      clients: this.opts.clients,
+      dockerVersion: this.opts.sessions ? await this.opts.docker.version().then((v) => String((v as { Version?: string }).Version ?? ''), () => undefined) : undefined,
       arch: os.arch(),
-      diskSupport: await this.#local.diskSupport().catch((error) => `probe failed: ${errStr(error)}`),
+      diskSupport: this.opts.sessions ? await this.#local.diskSupport().catch((error) => `probe failed: ${errStr(error)}`) : 'this runner runs no sessions',
       sdkVersion: SDK_VERSION,
       version: APP_VERSION,
-      agents: Object.keys(this.opts.agents ?? {}),
+      agents: this.opts.clients ? Object.keys(this.opts.agents ?? {}) : [],
     };
     const hello: HostHello = { ...(persisted.id ? { id: persisted.id } : {}), name: this.opts.name, boot: this.boot, facts };
-    const row = await this.#backend.call<{ id: string; name: string; heartbeatMs?: number }>('POST', '/session-runners/hello', hello);
+    const row = await this.#backend.call<{ id: string; name: string; heartbeatMs?: number }>('POST', '/runners/hello', hello);
     const beatMs = row.heartbeatMs && row.heartbeatMs > 0 ? row.heartbeatMs : 15_000;
     this.#id = row.id;
     if (persisted.id !== row.id) await fs.writeFile(idFile, JSON.stringify({ id: row.id }) + '\n');
     log.info({ host: row.id, name: this.opts.name, boot: this.boot, heartbeatMs: beatMs, facts }, 'session runner registered — opening the feed');
     this.#link = new Link(this.#backend, {
-      feed: `/session-runners/${row.id}/jobs?boot=${encodeURIComponent(this.boot)}`,
-      relay: `/session-runners/${row.id}/jobs/events`,
+      feed: `/runners/${row.id}/jobs?boot=${encodeURIComponent(this.boot)}`,
+      relay: `/runners/${row.id}/jobs/events`,
       onRecord: (record) => { if (record.event !== 'heartbeat') this.#onJob(record as unknown as Job); },
       reset: () => this.#connection.destroy(),
       onStatus: (up) => log.info({ host: row.id }, up ? 'link up' : 'link down — jobs keep running, events queue'),
@@ -196,6 +214,7 @@ export class SessionRunner {
    *  beat rather than holding the beat back: liveness first. */
   async #load(): Promise<HostLoad> {
     const cpu = os.loadavg()[0] / Math.max(1, os.cpus().length);
+    if (!this.opts.sessions) return { cpu, freeGB: Infinity, usedPct: 0, running: 0 };
     const disk = await this.#local.disk().catch(() => ({ freeGB: Infinity, usedPct: 0 }));
     const running = await this.#local.activeWorkspaces().then((ids) => ids.length, () => 0);
     return { cpu, freeGB: disk.freeGB, usedPct: disk.usedPct, running };
@@ -234,6 +253,11 @@ export class SessionRunner {
   }
 
   async #run(job: Job, entry: { cancel?: () => void }): Promise<void> {
+    // A job for the kind this runner is not: placement never sends one, so
+    // this is a bug said out loud, not a condition handled.
+    if (job.type === 'turn' ? !this.opts.clients : !this.opts.sessions) {
+      throw new Error(`this runner runs ${this.opts.sessions ? 'sessions' : 'clients'} only — it was sent a ${job.type} job`);
+    }
     const local = this.#local;
     const result = (value: unknown) => this.#report({ job: job.id, type: 'result', value });
     switch (job.type) {
@@ -324,7 +348,7 @@ export class SessionRunner {
    *  this container; stop() said so) or `error`. A second update while one
    *  runs attaches to it. */
   async *#update(tag: string, sessionImage: string): AsyncGenerator<UpdateEvent> {
-    if (!this.opts.updateTriggerDir) throw new Error('this runner has no updater sidecar (UPDATE_TRIGGER_DIR unset) — bring its compose file up to date: phantom-cli runner start, or copy session-runner/ out of the image again');
+    if (!this.opts.updateTriggerDir) throw new Error('this runner has no updater sidecar (UPDATE_TRIGGER_DIR unset) — bring its compose file up to date: phantom-cli runner start, or copy runners/ out of the image again');
     const queue: UpdateEvent[] = [];
     let wake: (() => void) | null = null;
     let over = false;

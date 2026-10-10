@@ -1,4 +1,4 @@
-// SessionRunners — the hosts a workspace can be placed on, and where each
+// Runners — the hosts a workspace can be placed on, and where each
 // workspace is. The backend's own runner (this process, LocalHost) and every
 // registered session runner (a RemoteHost each, online or not). Three jobs:
 //
@@ -7,17 +7,17 @@
 //              Within a tier: fewest workspaces pinned, then most recently
 //              connected. Written to the workspace row; pinned from then on.
 //   ROUTING    `of(workspaceId)`: the host a workspace is on. The row's
-//              session_runner_id, cached here; null is the backend's own runner.
+//              runner_id, cached here; null is the backend's own runner.
 //   THE LINK   a host's hello (its row), its feed (jobs down), its relay
 //              (events up) — the routes call in here.
 //
 // A host is what its key makes it: the service role key registers a SHARED runner
 // (any user's workspace may land there); a user's key registers a USER
-// host (only that user's). The rows live in session_runners, read and written
+// host (only that user's). The rows live in runners, read and written
 // as the backend itself — a user never queries them directly.
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Drizzle } from '../storage/Database.js';
-import { sessionRunners, workspaces, type ProjectRow, type SessionRunnerRow } from '../storage/schema.js';
+import { runners, workspaces, type ProjectRow, type RunnerRow } from '../storage/schema.js';
 import type { LocalHost } from '../runtime/LocalHost.js';
 import { RemoteHost } from '../runtime/RemoteHost.js';
 import type { WorkspaceHost } from '../runtime/WorkspaceHost.js';
@@ -29,17 +29,23 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { scopeOf } from '../lib/scopes.js';
 import { logger, errStr } from '../lib/log.js';
 
-const log = logger('session-runners');
+const log = logger('runners');
 
 /** Who is talking to the hosts API: the service role (every host is theirs),
  *  or a user (their own runners). */
 export interface HostCaller { admin: boolean; userId: string | null }
 
-export class SessionRunnerError extends Error {
+export class RunnerError extends Error {
   constructor(readonly code: 'not_found' | 'access_denied' | 'no_host' | 'host_online' | 'host_in_use' | 'host_offline' | 'jobs_running', message: string, readonly retryable = false) { super(message); }
 }
 
-export interface SessionRunnerView extends SessionRunnerRow { online: boolean; workspaces: number; load: HostLoad | null; version: string | null }
+export interface RunnerView extends RunnerRow { online: boolean; workspaces: number; load: HostLoad | null; version: string | null;
+  /** What it runs (its hello): workspaces, turns, or both. */
+  sessions: boolean; clients: boolean }
+
+/** A runner's kinds off its facts; a row from before the split ran sessions. */
+export const runsSessions = (facts: { sessions?: boolean }): boolean => facts.sessions ?? true;
+export const runsClients = (facts: { clients?: boolean }): boolean => facts.clients ?? false;
 
 /** The runner's heartbeat when no setting says otherwise. */
 const HEARTBEAT_MS = 15_000;
@@ -48,8 +54,10 @@ const HEARTBEAT_MS = 15_000;
  *  wait for it (the push and the checkout inside a move go through `of`). */
 const inMove = new AsyncLocalStorage<string>();
 
-export class SessionRunners {
+export class Runners {
   readonly #remote = new Map<string, RemoteHost>();
+  /** Each runner's facts as of its last hello: what it runs. */
+  readonly #facts = new Map<string, RunnerRow['facts']>();
   /** The open feeds: when each host last spoke, and how to hang up on it. */
   readonly #feeds = new Map<string, { heard: number; close: () => void }>();
   #sweep: ReturnType<typeof setInterval> | null = null;
@@ -80,7 +88,7 @@ export class SessionRunners {
 
   /** The registered hosts, as proxies — offline until each connects. */
   async load(): Promise<void> {
-    for (const row of await this.database.select().from(sessionRunners)) this.#remote.set(row.id, new RemoteHost(row.id, row.name));
+    for (const row of await this.database.select().from(runners)) { this.#remote.set(row.id, new RemoteHost(row.id, row.name)); this.#facts.set(row.id, row.facts); }
     log.info({ hosts: this.#remote.size, runsContainers: this.opts.runsContainers }, 'session runners loaded');
     // A feed whose socket died silently (a laptop off the network) is hung
     // up on here: the host is offline, its jobs wait for its next feed. No
@@ -111,7 +119,7 @@ export class SessionRunners {
 
   async hostIdOf(workspaceId: string): Promise<string | null> {
     if (this.#placement.has(workspaceId)) return this.#placement.get(workspaceId)!;
-    const [row] = await this.database.select({ hostId: workspaces.sessionRunnerId }).from(workspaces).where(eq(workspaces.id, workspaceId));
+    const [row] = await this.database.select({ hostId: workspaces.runnerId }).from(workspaces).where(eq(workspaces.id, workspaceId));
     const id = row?.hostId ?? null;
     if (row) this.#placement.set(workspaceId, id);
     return id;
@@ -122,14 +130,14 @@ export class SessionRunners {
 
   /** Re-pin a workspace (the move's write); the files are the caller's business. */
   async pin(workspaceId: string, hostId: string | null): Promise<void> {
-    await this.database.update(workspaces).set({ sessionRunnerId: hostId }).where(eq(workspaces.id, workspaceId));
+    await this.database.update(workspaces).set({ runnerId: hostId }).where(eq(workspaces.id, workspaceId));
     this.#placement.set(workspaceId, hostId);
   }
 
   /** Run `move` with the workspace marked as moving: lookups for it wait
    *  until the move is done (or failed), then see the new pin. */
   async moving<T>(workspaceId: string, move: () => Promise<T>): Promise<T> {
-    if (this.#moving.has(workspaceId)) throw new SessionRunnerError('host_in_use', 'this workspace is already being moved');
+    if (this.#moving.has(workspaceId)) throw new RunnerError('host_in_use', 'this workspace is already being moved');
     let done!: () => void;
     this.#moving.set(workspaceId, new Promise<void>((resolve) => { done = resolve; }));
     try { return await inMove.run(workspaceId, move); }
@@ -137,12 +145,14 @@ export class SessionRunners {
   }
 
   byId(id: string | null): WorkspaceHost | undefined { return id === null ? this.local : this.#remote.get(id); }
-  /** The runners whose link is up right now: the ones maintenance reaches. */
-  onlineRunners(): RemoteHost[] { return [...this.#remote.values()].filter((host) => host.online); }
+  /** The SESSION runners whose link is up right now: the ones maintenance
+   *  reaches (the warm checkouts, the disk sweep — a client runner has
+   *  neither a volume nor Docker). */
+  onlineRunners(): RemoteHost[] { return [...this.#remote.values()].filter((host) => host.online && runsSessions(this.#facts.get(host.id) ?? {})); }
   /** The projects that have had a workspace on this runner: the only ones it
    *  is stocked for (a credential goes nowhere it has not already been). */
   async projectsOn(hostId: string): Promise<Set<string>> {
-    const rows = await this.database.selectDistinct({ projectId: workspaces.projectId }).from(workspaces).where(eq(workspaces.sessionRunnerId, hostId));
+    const rows = await this.database.selectDistinct({ projectId: workspaces.projectId }).from(workspaces).where(eq(workspaces.runnerId, hostId));
     return new Set(rows.map((row) => row.projectId));
   }
 
@@ -155,15 +165,15 @@ export class SessionRunners {
    *  CPU wins; equal CPUs, one at random. A host that has not beaten yet
    *  reads as idle. */
   async place(project: ProjectRow, userId: string | null): Promise<WorkspaceHost> {
-    const rows = await this.database.select().from(sessionRunners);
+    const rows = await this.database.select().from(runners);
     const online = rows.filter((row) => this.#remote.get(row.id)?.online);
     const settings = this.opts.settings;
     const diskGb = settings ? await settings.resolve<number | null>('container_disk_gb', scopeOf(project)).catch(() => null) : null;
     const pct = settings ? Number(await settings.resolve('disk_cleanup_percent').catch(() => 0)) : 0;
-    const loadOf = (row: SessionRunnerRow) => this.#remote.get(row.id)!.load;
-    const able = online.filter((row) => (!diskGb || row.facts.diskSupport === null) && !(loadOf(row) && tooFull(loadOf(row)!, pct)));
-    const cpuOf = (row: SessionRunnerRow) => loadOf(row)?.cpu ?? 0;
-    const least = (tier: SessionRunnerRow[]): SessionRunnerRow | undefined => {
+    const loadOf = (row: RunnerRow) => this.#remote.get(row.id)!.load;
+    const able = online.filter((row) => runsSessions(row.facts) && (!diskGb || row.facts.diskSupport === null) && !(loadOf(row) && tooFull(loadOf(row)!, pct)));
+    const cpuOf = (row: RunnerRow) => loadOf(row)?.cpu ?? 0;
+    const least = (tier: RunnerRow[]): RunnerRow | undefined => {
       if (!tier.length) return undefined;
       const best = Math.min(...tier.map(cpuOf));
       const idle = tier.filter((row) => cpuOf(row) === best);
@@ -173,7 +183,7 @@ export class SessionRunners {
       ?? least(able.filter((row) => row.ownerUserId === null));
     if (chosen) return this.#remote.get(chosen.id)!;
     if (this.opts.runsContainers) return this.local;
-    throw new SessionRunnerError('no_host', userId
+    throw new RunnerError('no_host', userId
       ? 'no session runner is online for you — start one (phantom-cli runner start) or ask for a shared runner'
       : 'no shared runner runner is online, and this server runs no session containers itself');
   }
@@ -183,10 +193,10 @@ export class SessionRunners {
    *  own first, then shared — lowest CPU, random among equals. Null when
    *  none can: the server itself drives no handed-off turns. */
   async placeTurn(userId: string | null, agentType: string): Promise<RemoteHost | null> {
-    const rows = await this.database.select().from(sessionRunners);
-    const able = rows.filter((row) => this.#remote.get(row.id)?.online && (row.facts.agents ?? []).includes(agentType));
-    const cpuOf = (row: SessionRunnerRow) => this.#remote.get(row.id)!.load?.cpu ?? 0;
-    const least = (tier: SessionRunnerRow[]): SessionRunnerRow | undefined => {
+    const rows = await this.database.select().from(runners);
+    const able = rows.filter((row) => this.#remote.get(row.id)?.online && runsClients(row.facts) && (row.facts.agents ?? []).includes(agentType));
+    const cpuOf = (row: RunnerRow) => this.#remote.get(row.id)!.load?.cpu ?? 0;
+    const least = (tier: RunnerRow[]): RunnerRow | undefined => {
       if (!tier.length) return undefined;
       const best = Math.min(...tier.map(cpuOf));
       const idle = tier.filter((row) => cpuOf(row) === best);
@@ -200,8 +210,8 @@ export class SessionRunners {
   private async workspaceCounts(hostIds: string[]): Promise<Map<string, number>> {
     if (!hostIds.length) return new Map();
     // Files present: a purged session's row stays, pinned, and holds nothing.
-    const rows = await this.database.select({ hostId: workspaces.sessionRunnerId, n: sql<number>`count(*)::int` })
-      .from(workspaces).where(and(inArray(workspaces.sessionRunnerId, hostIds), eq(workspaces.onDisk, true))).groupBy(workspaces.sessionRunnerId);
+    const rows = await this.database.select({ hostId: workspaces.runnerId, n: sql<number>`count(*)::int` })
+      .from(workspaces).where(and(inArray(workspaces.runnerId, hostIds), eq(workspaces.onDisk, true))).groupBy(workspaces.runnerId);
     return new Map(rows.flatMap((row) => (row.hostId ? [[row.hostId, row.n] as const] : [])));
   }
 
@@ -217,31 +227,40 @@ export class SessionRunners {
 
   // ── the link ──────────────────────────────────────────────────────────
 
-  private owns(row: SessionRunnerRow, caller: HostCaller): boolean {
+  private owns(row: RunnerRow, caller: HostCaller): boolean {
     return caller.admin ? row.ownerUserId === null : row.ownerUserId === caller.userId;
   }
 
   /** A host says hello: its row made or found. The row's owner is the
    *  caller: the service role's hosts are shared, a user's are theirs. A
-   *  persisted id that names someone else's row is refused. */
-  async hello(caller: HostCaller, hello: HostHello): Promise<SessionRunnerRow> {
+   *  persisted id that names someone else's row is refused. A CLIENT runner
+   *  has no volume to keep an id in, so without one it takes back its own
+   *  offline row by name — a recreated container is the same runner. */
+  async hello(caller: HostCaller, hello: HostHello): Promise<RunnerRow> {
     const ownerUserId = caller.admin ? null : caller.userId;
     const facts = hello.facts;
     const name = hello.name.trim().slice(0, 80) || 'host';
+    const take = async (row: RunnerRow): Promise<RunnerRow> => {
+      if (!this.owns(row, caller)) throw new RunnerError('access_denied', 'that host id belongs to someone else');
+      const [updated] = await this.database.update(runners).set({ name, facts, boot: hello.boot, lastSeenAt: new Date() })
+        .where(eq(runners.id, row.id)).returning();
+      this.#remote.get(row.id)!.name = name;
+      this.#facts.set(row.id, facts);
+      return updated;
+    };
     if (hello.id) {
-      const [row] = await this.database.select().from(sessionRunners).where(eq(sessionRunners.id, hello.id));
-      if (row) {
-        if (!this.owns(row, caller)) throw new SessionRunnerError('access_denied', 'that host id belongs to someone else');
-        const [updated] = await this.database.update(sessionRunners).set({ name, facts, boot: hello.boot, lastSeenAt: new Date() })
-          .where(eq(sessionRunners.id, row.id)).returning();
-        this.#remote.get(row.id)!.name = name;
-        return updated;
-      }
+      const [row] = await this.database.select().from(runners).where(eq(runners.id, hello.id));
+      if (row) return take(row);
+    } else if (facts.clients && !facts.sessions) {
+      const rows = await this.database.select().from(runners).where(eq(runners.name, name));
+      const own = rows.find((row) => this.owns(row, caller) && runsClients(row.facts) && !runsSessions(row.facts) && !this.#remote.get(row.id)?.online);
+      if (own) return take(own);
     }
-    const [row] = await this.database.insert(sessionRunners)
+    const [row] = await this.database.insert(runners)
       .values({ id: hello.id ?? newId(), name, ownerUserId, facts, boot: hello.boot, lastSeenAt: new Date() }).returning();
     this.#remote.set(row.id, new RemoteHost(row.id, name));
-    log.info({ host: row.id, name, shared: ownerUserId === null }, 'session runner registered');
+    this.#facts.set(row.id, facts);
+    log.info({ host: row.id, name, shared: ownerUserId === null, sessions: facts.sessions, clients: facts.clients }, 'runner registered');
     return row;
   }
 
@@ -250,7 +269,7 @@ export class SessionRunners {
   async attach(id: string, caller: HostCaller, boot: string, writer: (job: Job) => void, close: () => void): Promise<() => Promise<void>> {
     const row = await this.rowFor(id, caller);
     const host = this.#remote.get(row.id)!;
-    await this.database.update(sessionRunners).set({ connectedAt: new Date(), lastSeenAt: new Date(), boot }).where(eq(sessionRunners.id, id));
+    await this.database.update(runners).set({ connectedAt: new Date(), lastSeenAt: new Date(), boot }).where(eq(runners.id, id));
     // One feed per host: a new one replaces the old, which is hung up on.
     this.#feeds.get(id)?.close();
     const feed = { heard: Date.now(), close };
@@ -260,7 +279,7 @@ export class SessionRunners {
     return async () => {
       if (this.#feeds.get(id) === feed) this.#feeds.delete(id);
       host.unlink(writer);
-      await this.database.update(sessionRunners).set({ lastSeenAt: new Date() }).where(eq(sessionRunners.id, id)).catch(() => {});
+      await this.database.update(runners).set({ lastSeenAt: new Date() }).where(eq(runners.id, id)).catch(() => {});
       log.info({ host: id, name: row.name }, 'session runner offline');
     };
   }
@@ -275,20 +294,21 @@ export class SessionRunners {
   /** The host exists and is the caller's — or the refusal. */
   async check(id: string, caller: HostCaller): Promise<void> { await this.rowFor(id, caller); }
 
-  private async rowFor(id: string, caller: HostCaller): Promise<SessionRunnerRow> {
-    const [row] = await this.database.select().from(sessionRunners).where(eq(sessionRunners.id, id));
-    if (!row || !this.#remote.has(row.id)) throw new SessionRunnerError('not_found', `no session runner ${id}`);
-    if (!this.owns(row, caller)) throw new SessionRunnerError('access_denied', 'access denied');
+  private async rowFor(id: string, caller: HostCaller): Promise<RunnerRow> {
+    const [row] = await this.database.select().from(runners).where(eq(runners.id, id));
+    if (!row || !this.#remote.has(row.id)) throw new RunnerError('not_found', `no session runner ${id}`);
+    if (!this.owns(row, caller)) throw new RunnerError('access_denied', 'access denied');
     return row;
   }
 
   /** The hosts a caller may see: the service role sees all; a user sees their
    *  own and the shared ones. */
-  async list(caller: HostCaller): Promise<SessionRunnerView[]> {
-    const rows = await this.database.select().from(sessionRunners);
+  async list(caller: HostCaller): Promise<RunnerView[]> {
+    const rows = await this.database.select().from(runners);
     const visible = rows.filter((row) => caller.admin || row.ownerUserId === null || row.ownerUserId === caller.userId);
     const counts = await this.workspaceCounts(visible.map((row) => row.id));
-    return visible.map((row) => ({ ...row, online: this.#remote.get(row.id)?.online ?? false, workspaces: counts.get(row.id) ?? 0, load: this.#remote.get(row.id)?.load ?? null, version: row.facts.version ?? null }));
+    return visible.map((row) => ({ ...row, online: this.#remote.get(row.id)?.online ?? false, workspaces: counts.get(row.id) ?? 0, load: this.#remote.get(row.id)?.load ?? null, version: row.facts.version ?? null,
+      sessions: runsSessions(row.facts), clients: runsClients(row.facts) }));
   }
 
   // ── upgrades ──────────────────────────────────────────────────────────
@@ -303,9 +323,9 @@ export class SessionRunners {
   async update(id: string, caller: HostCaller, tag: string, options: { restartAnyway?: boolean }, onEvent: (event: UpdateEvent) => void): Promise<void> {
     const row = await this.rowFor(id, caller);
     const host = this.#remote.get(row.id)!;
-    if (!host.online) throw new SessionRunnerError('host_offline', `${row.name} is offline`);
+    if (!host.online) throw new RunnerError('host_offline', `${row.name} is offline`);
     if (host.inFlight > 0 && !options.restartAnyway) {
-      throw new SessionRunnerError('jobs_running', `${host.inFlight === 1 ? '1 job is' : `${host.inFlight} jobs are`} in flight on ${row.name} — updating now would cut ${host.inFlight === 1 ? 'it' : 'them'} (they fail retryable); send restart_anyway: true to update anyway`, true);
+      throw new RunnerError('jobs_running', `${host.inFlight === 1 ? '1 job is' : `${host.inFlight} jobs are`} in flight on ${row.name} — updating now would cut ${host.inFlight === 1 ? 'it' : 'them'} (they fail retryable); send restart_anyway: true to update anyway`, true);
     }
     const sessionImage = this.opts.settings ? String(await this.opts.settings.resolve('container_image').catch(() => '')).replace(/:[^/]*$/, '') : '';
     log.info({ host: row.id, name: row.name, tag }, 'session runner update requested');
@@ -318,7 +338,7 @@ export class SessionRunners {
   }
 
   /** The runners a caller may update that are online and not on `tag`. */
-  async behind(caller: HostCaller, tag: string): Promise<SessionRunnerView[]> {
+  async behind(caller: HostCaller, tag: string): Promise<RunnerView[]> {
     return (await this.list(caller)).filter((row) => row.online && row.version !== tag);
   }
 
@@ -334,9 +354,9 @@ export class SessionRunners {
   /** Forget a host: offline, and nothing pinned to it. */
   async remove(id: string, caller: HostCaller): Promise<void> {
     const row = await this.rowFor(id, caller);
-    if (this.#remote.get(row.id)!.online) throw new SessionRunnerError('host_online', 'the host is connected — stop it first');
-    if ((await this.workspaceCounts([row.id])).get(row.id)) throw new SessionRunnerError('host_in_use', 'workspaces are still on this host — move or delete them first');
-    await this.database.delete(sessionRunners).where(eq(sessionRunners.id, row.id));
+    if (this.#remote.get(row.id)!.online) throw new RunnerError('host_online', 'the host is connected — stop it first');
+    if ((await this.workspaceCounts([row.id])).get(row.id)) throw new RunnerError('host_in_use', 'workspaces are still on this host — move or delete them first');
+    await this.database.delete(runners).where(eq(runners.id, row.id));
     this.#remote.delete(row.id);
   }
 }

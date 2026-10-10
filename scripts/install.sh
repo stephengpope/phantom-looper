@@ -256,6 +256,9 @@ if $SUDO test -f "$ENV_FILE"; then
   [ "$CERT_EMAIL_SET" -eq 1 ] && env_set BACKEND_CERT_EMAIL "$CERT_EMAIL"
   [ -n "$TLS" ] && env_set BACKEND_TLS "$TLS"
   env_set BACKEND_DIR "$DIR"
+  # The runners started with the group (docker-compose.yml: session-runner,
+  # client-runner) list under this box's name.
+  [ -n "$(env_get RUNNER_NAME)" ] || env_set RUNNER_NAME "$(hostname)"
   # The address is a domain someone chose, or an IP this script recorded. Only
   # refresh an IP (server moved) — never replace a domain with one.
   CUR=$(env_get BACKEND_ADDRESS)
@@ -343,40 +346,18 @@ printf '\n'
 say "Verifying what a client will use..."
 $SUDO env BACKEND_DIR="$DIR" phantom-backend check || true
 
-# ── The session runner on this box ──────────────────────────────────────────
-# The api places no session containers on itself (RUN_SESSION_CONTAINERS=0,
-# the default): every new workspace lands on a session runner. This box runs
-# one — a shared runner, from the files the image shipped ($DIR/session-runner),
-# connected to the api through Caddy exactly like a runner anywhere else. Its
-# .env holds nothing of its own (the key is the server's), so it is rewritten
-# on every run: the address and the CA stay current. updater/apply.sh
-# recreates this stack on the new tag with the api's, so one upgrade moves both.
-RUNNER_DIR="$DIR/session-runner"
-if [ "$(env_get RUN_SESSION_CONTAINERS)" != 1 ] && $SUDO test -f "$RUNNER_DIR/docker-compose.yml"; then
-  ADDRESS=$(env_get BACKEND_ADDRESS)
-  CA=""
-  if [ "$(env_get BACKEND_TLS)" = internal ]; then
-    # Caddy's root, as one .env line: the runner turns the two characters \n back into newlines.
-    CA=$($SUDO docker compose exec -T caddy cat /data/caddy/pki/authorities/local/root.crt 2>/dev/null | awk '{ printf "%s\\n", $0 }') || CA=""
-  fi
-  RUNNER_PROFILES=""
-  case "$(env_get COMPOSE_PROFILES)" in *disk-quota*) RUNNER_PROFILES=disk-quota ;; esac
-  $SUDO sh -c "umask 077; cat > '$RUNNER_DIR/.env'" <<RUNNER_ENV
-BACKEND_URL=https://$ADDRESS
-BACKEND_KEY=$(env_get SERVICE_ROLE_KEY)
-HOST_NAME=$(hostname)
-BACKEND_CA="$CA"
-BACKEND_TAG=$(env_get BACKEND_TAG)
-RUNNER_DIR=$RUNNER_DIR
-HELPER_NAME=phantom-update-run-runner
-WORKSPACE_VOLUME=phantom-runner-workspaces
-COMPOSE_PROFILES=$RUNNER_PROFILES
-RUNNER_ENV
-  say "Starting the session runner on this box..."
-  if (cd "$RUNNER_DIR" && $SUDO docker compose up -d); then
-    ok "Session runner started (phantom-backend status shows it; phantom-backend logs runner follows it)"
-  else
-    say "the session runner did not start — phantom-backend logs runner"
+# ── The runners' trust ────────────────────────────────────────────────────────
+# The runners (session-runner, client-runner — services of this group) reach
+# the api through Caddy at the server's own address. When the server signs its
+# own certificate, they need Caddy's root: read off Caddy now that it is up,
+# written to .env as one line (the runner turns the two characters \n back
+# into newlines), and the runners recreated to pick it up. A public
+# certificate needs nothing.
+if [ "$(env_get BACKEND_TLS)" = internal ]; then
+  CA=$($SUDO docker compose exec -T caddy cat /data/caddy/pki/authorities/local/root.crt 2>/dev/null | awk '{ printf "%s\\n", $0 }') || CA=""
+  if [ -n "$CA" ] && [ "$(env_get BACKEND_CA)" != "$CA" ]; then
+    env_set BACKEND_CA "$CA"
+    $SUDO docker compose up -d session-runner client-runner || say "the runners did not start — phantom-backend logs session-runner"
   fi
 fi
 
@@ -397,4 +378,4 @@ else
   printf '      re-run this script with --address=your-domain --cert-email=you@example.com\n'
 fi
 printf '  - Update later: phantom-backend update vX.Y.Z, POST /update, or re-run this script.\n'
-printf '  - Logs: phantom-backend logs api  /  phantom-backend logs runner\n\n'
+printf '  - Logs: phantom-backend logs api  /  logs session-runner  /  logs client-runner\n\n'

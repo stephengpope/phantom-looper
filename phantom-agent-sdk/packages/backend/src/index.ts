@@ -55,8 +55,8 @@ export type { RunOpts, RunResult, StreamRecord, Exec } from './runtime/Sandbox.j
 export type { WorkspaceHost, Repo, WorkspaceFiles, ContainerPlan, ContainerState, DetachEvent } from './runtime/WorkspaceHost.js';
 export { LocalHost, type LocalHostOptions } from './runtime/LocalHost.js';
 export { RemoteHost } from './runtime/RemoteHost.js';
-export { SessionRunners, SessionRunnerError, type HostCaller, type SessionRunnerView } from './host/SessionRunners.js';
-export { SessionRunner, type SessionRunnerOptions, type TurnAgents } from './host/SessionRunner.js';
+export { Runners, RunnerError, type HostCaller, type RunnerView } from './host/Runners.js';
+export { Runner, type RunnerOptions, type TurnAgents } from './host/Runner.js';
 export { Turns, type TurnSpec, type PlacedTurn } from './host/Turns.js';
 export type { TurnJobResult } from './host/protocol.js';
 export type { Job, JobEvent, HostHello, HostFacts } from './host/protocol.js';

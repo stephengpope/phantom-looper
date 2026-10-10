@@ -1,7 +1,7 @@
 // The job protocol between the backend and a session runner — the ONLY
 // vocabulary the two speak. Jobs go DOWN the host's feed
-// (GET /session-runners/:id/jobs, ND-JSON); their events come UP the relay
-// (POST /session-runners/:id/jobs/events). Every job names a primitive of
+// (GET /runners/:id/jobs, ND-JSON); their events come UP the relay
+// (POST /runners/:id/jobs/events). Every job names a primitive of
 // runtime/WorkspaceHost.ts and carries everything the host needs to run it.
 //
 // A job ends with exactly one `result` or `error`; a streaming job (exec
@@ -101,6 +101,12 @@ export interface HostLoad {
 }
 
 export interface HostFacts {
+  /** What this runner runs (RUN_SESSIONS / RUN_CLIENTS): workspaces and
+   *  their containers, turns, or both. Placement reads these: a checkout
+   *  goes only to a runner that runs sessions, a turn only to one that runs
+   *  clients. Rows from before the split (absent) run sessions. */
+  sessions: boolean;
+  clients: boolean;
   dockerVersion?: string;
   arch?: string;
   /** Null when the box can hold a container to `container_disk_gb`, else why not. */

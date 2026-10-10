@@ -132,9 +132,9 @@ export const workspaces = phantomAgentSdk.table('workspaces', {
   syncLockExpiresAt: timestamp('sync_lock_expires_at', { withTimezone: true }),
   // WHERE THE FILES AND THE CONTAINER ARE (062): the session runner this
   // workspace was placed on, null for the backend itself (this server).
-  // Decided once at creation (host/SessionRunners.ts place), rewritten only
+  // Decided once at creation (host/Runners.ts place), rewritten only
   // by a move. Every file, git and container call routes by it.
-  sessionRunnerId: text('session_runner_id'),
+  runnerId: text('runner_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -144,12 +144,12 @@ export const workspaces = phantomAgentSdk.table('workspaces', {
 // a user runner (a user's: only their workspaces). `boot` is the host process's
 // id — a reconnect carries the same one, a restart a new one. `facts` is
 // what the box reported at hello (host/protocol.ts HostFacts).
-export const sessionRunners = phantomAgentSdk.table('session_runners', {
+export const runners = phantomAgentSdk.table('runners', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
   ownerUserId: text('owner_user_id'),
   boot: text('boot'),
-  facts: json('facts').notNull().$type<{ dockerVersion?: string; arch?: string; diskSupport: string | null; sdkVersion: string; version?: string; agents?: string[] }>(),
+  facts: json('facts').notNull().$type<{ sessions?: boolean; clients?: boolean; dockerVersion?: string; arch?: string; diskSupport: string | null; sdkVersion: string; version?: string; agents?: string[] }>(),
   connectedAt: timestamp('connected_at', { withTimezone: true }),
   lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -427,7 +427,7 @@ export type ProjectRow = typeof projects.$inferSelect;
 export type CardRow = typeof cards.$inferSelect;
 export type CronRow = typeof crons.$inferSelect;
 export type WorkspaceRow = typeof workspaces.$inferSelect;
-export type SessionRunnerRow = typeof sessionRunners.$inferSelect;
+export type RunnerRow = typeof runners.$inferSelect;
 /** The checkout's facts as a session carries them: joined from its workspace
  *  on every read. `status` says whether the files exist ('active' /
  *  'destroyed' — the wire's words); a session with no workspace reads as
@@ -439,7 +439,7 @@ export interface CheckoutFacts {
   lastPushAt: Date | null;
   workState: string | null;
   /** The session runner the checkout is on; null = this server (062). */
-  sessionRunnerId: string | null;
+  runnerId: string | null;
 }
 /** A session as reads return it — sessionColumns' shape, blobs excluded,
  *  its workspace's facts joined in (Sessions.view). */
