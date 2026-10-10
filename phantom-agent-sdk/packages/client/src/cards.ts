@@ -1,0 +1,52 @@
+import { randomBytes } from 'node:crypto';
+
+// The one default column list, shared by the server route and the kanban
+// tool schemas so the model can only send a real column name.
+export const DEFAULT_COLUMNS = ['backlog', 'plan', 'in_progress', 'blocked', 'done'];
+
+/** The one icon per card status — the cli's /resume column and board headers
+ *  (with the color), the digest's plain-text line (the char alone). */
+export const STATUS_ICON: Record<string, { char: string; color: string }> = {
+  backlog:     { char: '○', color: 'white' },
+  plan:        { char: '◇', color: 'magenta' },
+  in_progress: { char: '▶', color: 'blue' },
+  blocked:     { char: '✕', color: 'red' },
+  done:        { char: '✓', color: 'green' },
+  archived:    { char: '▪', color: 'gray' },
+};
+
+// Checklist items ({key, text, done}) are addressed by key: ticking names the
+// item, never resends the list — a mis-sent list was wiping whole checklists.
+// The key is a short random id, assigned by the SERVER when the item first
+// appears and FROZEN for the item's life. Random, never derived from the
+// text: a text-derived key invites the model to guess it, and a guess can
+// silently hit the WRONG item (duplicate texts, an item reworded since its
+// key was made). An id can only be COPIED from a read or a write result —
+// always right — or missed loudly (the error names the real keys).
+// projectSchema v8 backfilled the items that existed before keys with
+// slugs of their text; those keys are ordinary ids now, kept as they are.
+
+export interface ChecklistItem { key?: string; text: string; done?: boolean }
+
+/** Keys are lowercase. Models echo them cased ("K7F2", "Three" for a v8 key
+ *  "three") — so any key coming in, on a write or a tick, passes through
+ *  this first and case can never miss. */
+export const normalizeKey = (key: string): string =>
+  key.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
+export const newKey = (): string =>
+  Array.from(randomBytes(4), (b) => ID_ALPHABET[b % ID_ALPHABET.length]).join('');
+
+/** Normalize a list on WRITE: keep every key the caller sent (it came from a
+ *  read — identity must survive a reword or reorder), assign fresh ids to new
+ *  items, and re-id a duplicate so a key names exactly one item. */
+export function keyedItems(items: ChecklistItem[]): { key: string; text: string; done: boolean }[] {
+  const used = new Set<string>();
+  return items.map((item) => {
+    let key = (item.key && normalizeKey(item.key)) || newKey();
+    while (used.has(key)) key = newKey();
+    used.add(key);
+    return { key, text: item.text, done: item.done ?? false };
+  });
+}

@@ -156,7 +156,6 @@ Environment variables, if you need them:
 ## Develop
 
 ```bash
-git submodule update --init   # the SDK is a submodule: github.com/stephengpope/phantom-agent-sdk
 ./scripts/setup.sh     # first boot: .env + secrets, local workspace image, compose up (https, Caddy's own CA), cli connected
 npm run phantom-cli    # the app from source; `-- --resume <id>` to reopen a session
 ```
@@ -166,7 +165,6 @@ npm run typecheck
 ```
 
 ```
-phantom-agent-sdk/             the SDK, a git submodule of its own repo: edit here, commit and push there, then commit the pointer here
 phantom-agent-sdk/packages/client    the agent runtime an app runs (Agent, Session, BackendClient)
 phantom-agent-sdk/packages/backend   the backend an app configures (PhantomBackend, storage, API, git, Telegram)
 phantom-backend/               this app's backend: the looper, the cron scheduler, the Telegram bot, its config

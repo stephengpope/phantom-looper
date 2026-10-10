@@ -1,0 +1,98 @@
+// Git + exec surface. Exec is the one streamable tool; everything else stays
+// unary. Detached logs are ND-JSON on the volume at work/<id>/logs/ — NEVER
+// under project/, where the next push's add -A would commit them.
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { SessionRow, ProjectRow } from '../../storage/schema.js';
+import { ToolError } from '../../tools/envelope.js';
+import { err } from '../HttpApi.js';
+import type { PhantomBackend } from '../../PhantomBackend.js';
+import { SESSION_HEADER, toolSession } from '../../agents/sessionHeader.js';
+import { logger, errStr } from '../../lib/log.js';
+
+const log = logger('exec');
+
+const sessionHeader = {
+  type: 'object',
+  properties: { [SESSION_HEADER]: { type: 'string', description: 'Session id (ULID)' } },
+};
+
+export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend) {
+  // The caller's lock identity ('' when absent — publishSync falls back to
+  // the git client). Handed to auto-push/auto-pull as `by`, so the session
+  // feed's echo rule skips the window that is already drawing this stream.
+  const clientOf = (req: { headers: Record<string, unknown> }): string => {
+    const header = req.headers['x-phantom-client'];
+    return typeof header === 'string' ? header : '';
+  };
+
+  /** The one gate (sessionHeader.ts), plus the project git needs. */
+  async function resolveSession(req: { headers: Record<string, unknown> }):
+    Promise<{ session: SessionRow; project: ProjectRow }> {
+    const { session } = await toolSession(ctx.sessions, req.headers);
+    const project = await ctx.projects.get(session.projectId);
+    if (!project) throw new ToolError('not_found', 'project vanished');
+    return { session, project };
+  }
+
+  const send = (reply: { code: (status: number) => { send: (b: unknown) => unknown } }, error: unknown) => {
+    if (error instanceof ToolError) {
+      const status = error.code === 'busy' ? 409 : error.code === 'session_destroyed' ? 410 : error.code.startsWith('session') ? 404 : 400;
+      return reply.code(status).send(err(error.code, error.message, error.retryable));
+    }
+    throw error;
+  };
+
+  // The streamed git operations (auto-push, auto-pull) share ONE wire: ND-JSON
+  // because neither has a time limit — headers go out at once and every step
+  // (plus a heartbeat) keeps the client's body timeout fed. Records are
+  // {event:'step', step, detail?}, {event:'heartbeat'}, and exactly one
+  // terminal {event:'result', ...} — the operation's own result, or
+  // {result:'busy'} / {result:'error', reason} when it threw.
+  async function streamRun<Step extends object, Result extends object>(reply: FastifyReply, name: string, sessionId: string,
+    run: (onStep: (step: Step) => void) => Promise<Result>): Promise<FastifyReply> {
+    reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
+    const write = (record: unknown) => { reply.raw.write(`${JSON.stringify(record)}\n`); };
+    const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
+    try {
+      const result = await run((step) => write({ event: 'step', ...step }));
+      write({ event: 'result', ...result });
+    } catch (error) {
+      if (error instanceof ToolError && error.code === 'busy') {
+        write({ event: 'result', result: 'busy', reason: error.message });
+      } else {
+        log.error({ session: sessionId, err: errStr(error) }, `${name} threw`);
+        write({ event: 'result', result: 'error', reason: error instanceof Error ? error.message : String(error) });
+      }
+    } finally {
+      clearInterval(heartbeat);
+      reply.raw.end();
+    }
+    return reply;
+  }
+
+  // AUTO-PUSH: the whole path to base in one call, streamed as it runs.
+  // Result: pushed | nothing | blocked | error | busy (+ reason?, rounds?, sha?).
+  app.post('/git/auto-push', { schema: { tags: ['git'], headers: sessionHeader,
+    summary: 'Land work on the base branch',
+    description: 'Puts the session\'s work onto the project\'s base branch as one commit, bringing in the base branch\'s newer changes first. Progress streams as one JSON object per line, ending with the result.',
+    body: { type: 'object', additionalProperties: false } } },
+  async (req, reply) => {
+    let session: SessionRow; let project: ProjectRow;
+    try { ({ session, project } = await resolveSession(req)); }
+    catch (error) { return send(reply, error); }
+    return streamRun(reply, 'auto-push', session.id, (onStep) => ctx.git.autoPush(session, project, onStep, clientOf(req)));
+  });
+
+  // AUTO-PULL: base INTO the session branch in one call, streamed the same way.
+  // Result: merged | clean | blocked | error | busy (+ reason?, arrived?, files?, sha?, pushed?).
+  app.post('/git/auto-pull', { schema: { tags: ['git'], headers: sessionHeader,
+    summary: 'Bring in the base branch',
+    description: 'Brings the base branch\'s newer changes into the session\'s branch, without landing anything on the base branch. Progress streams as one JSON object per line, ending with the result.',
+    body: { type: 'object', additionalProperties: false } } },
+  async (req, reply) => {
+    let session: SessionRow; let project: ProjectRow;
+    try { ({ session, project } = await resolveSession(req)); }
+    catch (error) { return send(reply, error); }
+    return streamRun(reply, 'auto-pull', session.id, (onStep) => ctx.git.autoPull(session, project, onStep, clientOf(req)));
+  });
+}
