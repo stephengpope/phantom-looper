@@ -309,20 +309,47 @@ export function formatTokens(count: number): string {
  *  same way wherever it shows. */
 export const formatTokensOut = (count: number): string => `↓ ${formatTokens(count)}`;
 
-/** The input-token meter, the output meter's mirror: 1700 → "↑ 1.7k". */
-export const formatTokensIn = (count: number): string => `↑ ${formatTokens(count)}`;
-
-/** THE cache hit rate: the share of a session's lifetime PROMPT tokens the
- *  provider served from its prompt cache (cache reads / total input tokens).
- *  After AI SDK v7, `input` is already the total (noCache + cacheRead +
- *  cacheWrite), so the rate is simply cacheRead / input. One rule, so the
- *  launcher and the status bar never compute it two ways. Null when nothing
- *  was ever sent (nothing to rate); 0 is a real answer — cache not working. */
-export function cachePct(input: number, cacheRead: number, _cacheWrite: number): number | null {
-  // After AI SDK v7, `input` is already the total prompt tokens (noCache +
-  // cacheRead + cacheWrite) as reported by the provider's normalized usage.
-  // The rate is simply how much of that total was served from cache.
+/** THE cache hit rate of one model call: the share of its prompt the
+ *  provider served from cache (cache reads / input). After AI SDK v7,
+ *  `input` is already the total (noCache + cacheRead + cacheWrite), so the
+ *  rate is simply cacheRead / input. Null when nothing was sent (nothing to
+ *  rate); 0 is a real answer — cache not working. */
+export function cachePct(input: number, cacheRead: number): number | null {
   return input > 0 ? Math.round((cacheRead / input) * 100) : null;
+}
+
+/** THE token report — the three numbers worth a glance, in one shape for
+ *  every place that shows them (the toolbar, /resume): the SDK's and the
+ *  server's rows both carry the same facts, and this is the one rule that
+ *  turns them into text.
+ *
+ *    context  `48k (24%)`  the last model call's prompt — the window as it
+ *                          stands — as a share of the model's limit when
+ *                          known (`48k` when not). The compaction signal.
+ *    cache    `84%`        that same call's hit rate: a cache break shows
+ *                          the moment it happens, where a lifetime rate
+ *                          would hide it.
+ *    output   `↓ 12.4k`    lifetime output — the expensive tokens.
+ *
+ *  Each is undefined when there is nothing to say (no call yet, zero), so a
+ *  caller can drop it rather than draw a 0. */
+export interface TokenReport { context?: string; cache?: string; output?: string }
+export function tokenReport(input: {
+  /** The last call's prompt and cache reads; null/0 before the first call. */
+  lastInput?: number | null; lastCacheRead?: number | null;
+  /** The model's context window in tokens; 0 = unknown. */
+  limit?: number | null;
+  /** Lifetime output tokens. */
+  output?: number | null;
+}): TokenReport {
+  const last = input.lastInput ?? 0;
+  const limit = input.limit ?? 0;
+  const pct = cachePct(last, input.lastCacheRead ?? 0);
+  return {
+    context: last > 0 ? formatTokens(last) + (limit > 0 ? ` (${Math.round((last / limit) * 100)}%)` : '') : undefined,
+    cache: pct != null ? `${pct}%` : undefined,
+    output: (input.output ?? 0) > 0 ? formatTokensOut(input.output ?? 0) : undefined,
+  };
 }
 
 /** 44 → "44s", 124 → "2m 4s". */

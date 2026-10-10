@@ -1090,6 +1090,9 @@ export class WindowStore {
         tokensOutput: entry.usage.output || row.tokensOutput,
         tokensCacheRead: entry.usage.cacheRead || row.tokensCacheRead,
         tokensCacheWrite: entry.usage.cacheWrite || row.tokensCacheWrite,
+        lastInput: entry.lastCall?.input ?? row.lastInput,
+        lastCacheRead: entry.lastCall?.cacheRead ?? row.lastCacheRead,
+        lastCacheWrite: entry.lastCall?.cacheWrite ?? row.lastCacheWrite,
       };
     });
     const seen = new Set(rows.map((row) => row.id));
@@ -1100,6 +1103,7 @@ export class WindowStore {
         model: entry.summary.model, pinned: entry.pinned,
         tokensInput: entry.usage.input || null, tokensOutput: entry.usage.output || null,
         tokensCacheRead: entry.usage.cacheRead || null, tokensCacheWrite: entry.usage.cacheWrite || null,
+        lastInput: entry.lastCall?.input ?? null, lastCacheRead: entry.lastCall?.cacheRead ?? null, lastCacheWrite: entry.lastCall?.cacheWrite ?? null,
         // Nothing typed = no activity: it sorts LAST, never ahead of real work.
         lastUsedAt: new Date(entry.lastMessageAt || 0).toISOString(), locked: false, lastUserMessage: null,
       }));

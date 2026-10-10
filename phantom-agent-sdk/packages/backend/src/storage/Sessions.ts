@@ -406,6 +406,14 @@ export class Sessions {
     // A bigint SUM comes back from pg as text; mapWith(Number) makes it the
     // number the type says it is.
     const sum = (col: PgColumn) => sqlRaw<number>`coalesce(sum(${col}), 0)`.mapWith(Number);
+    // The LAST model call the session's own agent made (type = the row's
+    // agent, so a title or commit-message helper billed to the session is
+    // never mistaken for it): its input is the context window as it stands
+    // — the same fact the record's last usage line carries, read here for a
+    // list that never loads a transcript. Null before the first call.
+    const last = (col: PgColumn) => sqlRaw<number | null>`(select ${col} from ${tokenUsage}
+      where ${tokenUsage.sessionId} = ${sessions.id} and ${tokenUsage.type} = ${sessions.agent}
+      order by ${tokenUsage.createdAt} desc limit 1)`.mapWith((value: unknown) => value == null ? null : Number(value));
     let page = this.database
       .select({
         ...Sessions.view, card: cards.number, cardStatus: cards.status,
@@ -413,6 +421,9 @@ export class Sessions {
         tokensOutput: sum(tokenUsage.tokensOutput).as('tokens_output'),
         tokensCacheRead: sum(tokenUsage.tokensCacheRead).as('tokens_cache_read'),
         tokensCacheWrite: sum(tokenUsage.tokensCacheWrite).as('tokens_cache_write'),
+        lastInput: last(tokenUsage.tokensInput).as('last_input'),
+        lastCacheRead: last(tokenUsage.tokensCacheRead).as('last_cache_read'),
+        lastCacheWrite: last(tokenUsage.tokensCacheWrite).as('last_cache_write'),
       })
       .from(sessions)
       .leftJoin(workspaces, eq(workspaces.id, sessions.workspaceId))

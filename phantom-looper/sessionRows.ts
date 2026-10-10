@@ -30,8 +30,15 @@ export interface SessionRow {
   model?: string | null;
   /** The provider that model belongs to, pinned on the row alongside it. */
   provider?: string | null;
+  /** Lifetime sums of every call billed to the session. */
   tokensInput?: number | null; tokensOutput?: number | null;
   tokensCacheRead?: number | null; tokensCacheWrite?: number | null;
+  /** The LAST call the session's own agent made: `lastInput` is the context
+   *  window as it stands; with the cache fields, that call's hit rate. Null
+   *  before the first call. The same fact the record's last usage line
+   *  carries (client transcript.ts lastUsage), for a list that never loads
+   *  a transcript. */
+  lastInput?: number | null; lastCacheRead?: number | null; lastCacheWrite?: number | null;
   /** /pin: at the top of /resume. */
   pinned?: boolean;
 }

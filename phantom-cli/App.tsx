@@ -40,7 +40,7 @@ import { Text } from './components/Text.js';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { Tool } from 'ai';
 import type { BackendClient } from '@phantom-agent-sdk/client';
-import { phaseLabel, tokenCount, formatTokens, formatTokensOut, cachePct } from './state.js';
+import { phaseLabel, tokenCount, tokenReport } from './state.js';
 import { activeHold } from './sessions.js';
 import { COMMANDS, complete, matches } from './commands.js';
 import { quiet, type Api } from './request.js';
@@ -677,24 +677,16 @@ export function App({
   const provider = session?.summary.provider;
   const modelMark = rawModel && provider && rawModel.startsWith(`${provider}-`)
     ? rawModel.slice(provider.length + 1) : rawModel;
-  // Three meters, right of the model. CONTEXT: the last model call's prompt
-  // size — the window as it stands — as a share of the model's limit when
-  // the catalog knows it (`48k (24%)`, else `48k`). The compaction signal.
-  // CACHE: that same call's hit rate (`84%`), so a cache break shows the
-  // moment it happens — a lifetime rate would hide it. OUTPUT: lifetime
-  // (`↓ 12.4k`, the expensive ones), plus what a running turn has streamed.
-  // The first two read the record's last usage line (sessions.ts lastCall)
-  // — never computed from a delta, so a tool-result step draws the same
-  // text and nothing blinks. All hidden before the first call.
-  const last = session?.lastCall ?? null;
-  const limit = session && provider && rawModel ? windowStore.contextWindowOf(provider, rawModel) : 0;
-  const contextMark = last && last.input > 0
-    ? formatTokens(last.input) + (limit > 0 ? ` (${Math.round((last.input / limit) * 100)}%)` : '') : undefined;
-  const cachePctNow = last ? cachePct(last.input, last.cacheRead, last.cacheWrite) : null;
-  const cacheMark = cachePctNow != null ? `${cachePctNow}%` : undefined;
-  const tokensShown = session
-    ? session.usage.output + ((session.busy || session.remoteBusy) ? tokenCount(session.tokens) : 0) : 0;
-  const outMark = tokensShown > 0 ? formatTokensOut(tokensShown) : undefined;
+  // THE token report (state.ts tokenReport — the same shape /resume draws):
+  // context and cache from the record's last usage line (sessions.ts
+  // lastCall — read, never computed from a delta, so a tool-result step
+  // draws the same text and nothing blinks), output lifetime plus what a
+  // running turn has streamed so far.
+  const report = session ? tokenReport({
+    lastInput: session.lastCall?.input, lastCacheRead: session.lastCall?.cacheRead,
+    limit: provider && rawModel ? windowStore.contextWindowOf(provider, rawModel) : 0,
+    output: session.usage.output + ((session.busy || session.remoteBusy) ? tokenCount(session.tokens) : 0),
+  }) : {};
   // The session's name (from /rename or the auto-title); a fresh session
   // without one yet shows nothing here. Kept current by /rename and the
   // staleness GET (window.ts), so the line moves the moment the name lands.
@@ -708,7 +700,7 @@ export function App({
   // prefix rendered by Toolbar itself. The line reads
   // `◆ • PHA-7 · my session · claude-sonnet-4-5 · 48k (24%) · 84% · ↓ 12.4k · 2 tasks`.
   const withMode = (rest?: string): ToolbarGroup[] =>
-    ([[cardMark, nameMark], [modelMark], [contextMark], [cacheMark], [outMark], [taskMark], [rest]] as (ToolbarPart | undefined)[][])
+    ([[cardMark, nameMark], [modelMark], [report.context], [report.cache], [report.output], [taskMark], [rest]] as (ToolbarPart | undefined)[][])
       .map((group) => group.filter((part): part is ToolbarPart => Boolean(part)))
       .filter((group) => group.length);
 

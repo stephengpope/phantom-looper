@@ -192,6 +192,7 @@ export const pickerScreen = (store: WindowStore, which: 'project' | 'resume'): O
   store.picker ? <Launcher
     mode={which === 'resume' ? 'sessions' : 'projects'}
     projects={store.projectRows} sessions={store.picker.sessions} total={store.picker.total}
+    contextWindowOf={(provider, model) => store.contextWindowOf(provider, model)}
     showBackground={store.showBackground}
     onToggleBackground={() => store.toggleBackground()}
     query={store.pickerQuery} rowsQuery={store.picker.query}

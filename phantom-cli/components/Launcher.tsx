@@ -14,7 +14,7 @@ import { Screen, type FooterKey } from './Screen.js';
 import { TextInput } from './TextInput.js';
 import { FixedText } from './Text.js';
 import { tableChoices, type TableRow, type Cell } from './table.js';
-import { formatTokensIn, formatTokensOut, cachePct } from '../state.js';
+import { tokenReport } from '../state.js';
 
 export interface ProjectInfo {
   id: string; owner: string; name: string; displayName?: string | null;
@@ -78,6 +78,9 @@ export function sessionChoices(
   showBackground = false,
   query = '',
   projectId: string | null = null,
+  /** The model's context window in tokens, 0 while unknown — the token
+   *  column's `(24%)`. Absent (tests) = no share drawn. */
+  contextWindowOf?: (provider: string, model: string) => number,
 ): Choice<Launch | null>[] {
   const byId = new Map(projects.map((project) => [project.id, project]));
   // WHICH sessions are listed is the server's call (`GET /sessions?typed=
@@ -129,12 +132,12 @@ export function sessionChoices(
   // Status icons: ○ gray (backlog), ◇ magenta (plan), ▶ yellow (in_progress),
   //               ✕ red (blocked), ✓ green (done).
   // work is 14 = the mark and its space (2) + "not pushed"/"not merged" (10)
-  // + the gutter. tokens is 24 = the widest meter pair
-  // ("↑ 12.4k (100%) ↓ 12.4k", 22) + the gutter. who and when ride in ONE
+  // + the gutter. tokens is 28 = the widest token report
+  // ("999k (100%) · 100% · ↓ 12.4k", 26) + the gutter. who and when ride in ONE
   // free-running last column ("coder 2h") — one question ("whose is this
   // and how fresh"), one column.
 
-  const COLS = { card: 8, workState: 14, name: 42, model: 20, tokens: 24 };
+  const COLS = { card: 8, workState: 14, name: 42, model: 20, tokens: 28 };
   const rows = sessions.map((session): TableRow<Launch | null> => {
     // A supervisor session names itself: the supervisor's conversation for its
     // card — read-only. A cron's run is a normal coding session that a
@@ -168,15 +171,16 @@ export function sessionChoices(
     // the server did not give: the list may not have been fetched with
     // git=true yet (the instant first paint), or there is nothing to measure.
     const workCol = session.workState ? WORK[session.workState] : session.lastUserMessage ? { text: 'unknown', mark: 'gray' } : '·';
-    // The token meters are the status bar's own shapes (`↑ 12.4k`,
-    // `↓ 1.7k`) and its own rule: zero or unknown is no news, the blank-fact
-    // dot. The cache hit rate rides the INPUT meter — caching is a property
-    // of prompt tokens, never of output — by state.ts's one rule.
-    const pct = cachePct(session.tokensInput ?? 0, session.tokensCacheRead ?? 0, session.tokensCacheWrite ?? 0);
-    const inMeter = session.tokensInput
-      ? formatTokensIn(session.tokensInput) + (pct != null ? ` (${pct}%)` : '') : '';
-    const outMeter = session.tokensOutput ? formatTokensOut(session.tokensOutput) : '';
-    const tokensCol = [inMeter, outMeter].filter(Boolean).join(' ') || '·';
+    // THE token report — the toolbar's own three (state.ts tokenReport):
+    // context `48k (24%)`, that call's cache `84%`, lifetime output
+    // `↓ 12.4k`. The server row carries the last call's numbers; the window
+    // limit comes from the catalog. Nothing to say = the blank-fact dot.
+    const report = tokenReport({
+      lastInput: session.lastInput, lastCacheRead: session.lastCacheRead,
+      limit: session.provider && session.model ? contextWindowOf?.(session.provider, session.model) : 0,
+      output: session.tokensOutput,
+    });
+    const tokensCol = [report.context, report.cache, report.output].filter(Boolean).join(' · ') || '·';
     // ☠ = no workspace (the disk sweep took it). The time stays — when it was
     // last touched is still the fact that matters.
     const whenCol: Cell = dead ? { text: when, mark: 'gray', markChar: '☠', markAfter: true } : when;
@@ -250,8 +254,11 @@ export function projectChoices(projects: ProjectInfo[], canAdd = true): Choice<L
 /** One list, two uses. `mode` decides which — sessions for /resume, projects
  *  for a fresh start. Deliberately not both at once: launching means "start
  *  work", reopening is a different intent with its own command. */
-export function Launcher({ mode, projects, sessions, total, busy, loaded, clientId, onPick, onEdit, onDuplicate, onPin, onPing, onClose, onTrash, onCancel, onNearEnd, showBackground, onToggleBackground, query = '', rowsQuery = query, onQuery, projectId = null, onCycleProject, now, title, footer, notice, canAdd }: {
+export function Launcher({ mode, projects, sessions, total, busy, loaded, clientId, onPick, onEdit, onDuplicate, onPin, onPing, onClose, onTrash, onCancel, onNearEnd, showBackground, onToggleBackground, query = '', rowsQuery = query, onQuery, projectId = null, onCycleProject, now, title, footer, notice, canAdd, contextWindowOf }: {
   mode: 'sessions' | 'projects';
+  /** The model's context window in tokens (WindowStore.contextWindowOf),
+   *  0 while unknown — the token column's `(24%)`. Absent (tests) = no share. */
+  contextWindowOf?: (provider: string, model: string) => number;
   /** ←→ on /resume: the project the rows are limited to (null = all),
    *  and the cycle. Like the filter line, the rows are the server's answer
    *  (WindowStore.pickerProject); this screen names it in the title.
@@ -343,7 +350,7 @@ export function Launcher({ mode, projects, sessions, total, busy, loaded, client
   useInput((_ch, key) => { if (key.escape) leaveFilter(); }, { isActive: filtering });
   // The background seats are hidden by default; [s] shows every session.
   const choices = mode === 'sessions'
-    ? sessionChoices(projects, sessions ?? [], now, busy, loaded, clientId, showBackground ?? false, rowsQuery, projectId)
+    ? sessionChoices(projects, sessions ?? [], now, busy, loaded, clientId, showBackground ?? false, rowsQuery, projectId, contextWindowOf)
     : projectChoices(projects, canAdd ?? true);
   if (filtering) {
     return (
