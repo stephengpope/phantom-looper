@@ -76,6 +76,9 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }}
 
+      # Artifact is digest-<arch>-<image>, image LAST: the manifests job globs
+      # digest-*-<image>, and a glob anchored at the end can't let phantom-backend
+      # swallow phantom-backend-session's digests (image-first naming did).
       - name: Hand the digest to the manifests job
         run: |
           mkdir -p /tmp/digests
@@ -83,7 +86,7 @@ jobs:
           touch "/tmp/digests/${DIGEST#sha256:}"
       - uses: actions/upload-artifact@v7
         with:
-          name: digest-${{ matrix.image.name }}-${{ matrix.platform.arch }}
+          name: digest-${{ matrix.platform.arch }}-${{ matrix.image.name }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -102,7 +105,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          pattern: digest-${{ matrix.name }}-*
+          pattern: digest-*-${{ matrix.name }}
           path: /tmp/digests
           merge-multiple: true
       - uses: docker/setup-buildx-action@v4
