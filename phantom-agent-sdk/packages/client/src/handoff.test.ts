@@ -107,6 +107,7 @@ function turnInput(model: LanguageModel, history: ModelMessage[], opening: strin
     system: [], tools: lookTool(), terminal: [], history, maxSteps: null, reasoning: undefined,
     loopSignal: loopSignal ?? (() => new AbortController().signal),
     afterStop: () => [], opening, pending: () => [], handoff: () => false,
+    recordedByServer: new Set<string>(), onDisconnect: () => () => undefined, handoffNow: async () => false,
     record: async (added) => { lines.push(...added); },
     onPart: () => undefined, onToolError: () => undefined, unsent: () => undefined,
   };
@@ -167,4 +168,45 @@ test('6. a hand-off asked during a text-only reply is not a hand-off: the turn i
   const result = await runTurn(input);
   assert.equal(result.outcome, 'done');
   assert.equal(result.text, 'all done');
+});
+
+test('7. a server-recorded tool: the turn writes no result for it, and the tool runs only after the call is in the record', async () => {
+  const { model } = mockModel([callsTool(), saysText('done')]);
+  const lines: TranscriptLine[] = [];
+  let assistantInRecordWhenToolRan = false;
+  const input = turnInput(model, [], ['go'], lines);
+  input.recordedByServer = new Set(['look']);
+  input.tools = lookTool(() => { assistantInRecordWhenToolRan = lines.some((line) => line.type === 'message' && line.message.role === 'assistant'); });
+  const result = await runTurn(input);
+  assert.equal(result.outcome, 'done');
+  assert.ok(assistantInRecordWhenToolRan, 'the tool ran after its call was recorded');
+  const roles = lines.filter((line) => line.type === 'message').map((line) => line.message.role);
+  assert.deepEqual(roles, ['user', 'assistant', 'assistant'], 'no tool line from this side — the server wrote it');
+});
+
+test('8. disconnect mid tool call: handoffNow takes it, the loop is cut, nothing is written for the open call', async () => {
+  const { model, prompts } = mockModel([callsTool(), saysText('never')]);
+  const lines: TranscriptLine[] = [];
+  let disconnect: (() => void) | null = null;
+  let toolAborted = false;
+  const input = turnInput(model, [], ['go'], lines);
+  input.recordedByServer = new Set(['look']);
+  input.onDisconnect = (listener) => { disconnect = listener; return () => undefined; };
+  input.handoffNow = async () => true;
+  input.tools = {
+    look: tool({
+      description: 'slow', inputSchema: jsonSchema<{ at: string }>({ type: 'object', properties: { at: { type: 'string' } } }),
+      execute: (_args, options) => new Promise((resolve) => {
+        options?.abortSignal?.addEventListener('abort', () => { toolAborted = true; resolve({ cut: true }); });
+        setTimeout(() => disconnect?.(), 20);   // the person disconnects while the tool runs
+      }),
+    }),
+  };
+  const result = await runTurn(input);
+  assert.equal(result.outcome, 'handed_off');
+  assert.ok(toolAborted, 'the open call was cut with the loop');
+  assert.equal(prompts().length, 1);
+  const roles = lines.filter((line) => line.type === 'message').map((line) => line.message.role);
+  assert.deepEqual(roles, ['user', 'assistant'], 'the call is recorded; its result is the api\'s to write');
+  assert.ok(!lines.some((line) => line.type === 'interrupted'));
 });

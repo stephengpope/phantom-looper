@@ -64,6 +64,8 @@ export type Envelope<T> =
 export interface CallOptions {
   /** Sent as the session header. */
   sessionId?: string;
+  /** Further headers this one request carries (a tool call's id). */
+  headers?: Record<string, string>;
   signal?: AbortSignal;
   /** false: this request is never retried (best-effort work). */
   retry?: boolean;
@@ -167,7 +169,7 @@ export class BackendClient {
    *  identity, the session when the call is on behalf of one, and
    *  content-type ONLY with a body (Fastify 400s a bodyless request that
    *  claims application/json). */
-  #headers(opts: { sessionId?: string; contentType?: string }): Record<string, string> {
+  #headers(opts: { sessionId?: string; contentType?: string; headers?: Record<string, string> }): Record<string, string> {
     return {
       ...credentialHeaders(this.#credential),
       [CLIENT_HEADER]: this.clientId,
@@ -175,6 +177,7 @@ export class BackendClient {
       ...(this.actingFor ? { [ACTING_ORGANIZATION_HEADER]: this.actingFor.organizationId,
         ...(this.actingFor.userId ? { [ACTING_USER_HEADER]: this.actingFor.userId } : {}) } : {}),
       ...(opts.sessionId ? { [SESSION_HEADER]: opts.sessionId } : {}),
+      ...(opts.headers ?? {}),
       ...(opts.contentType ? { 'content-type': opts.contentType } : {}),
     };
   }
@@ -190,7 +193,7 @@ export class BackendClient {
     const contentType = raw ? raw.contentType : body !== undefined ? 'application/json' : undefined;
     try {
       return await fetchWith(`${this.url}${path}`, {
-        method, headers: this.#headers({ sessionId: opts.sessionId, contentType }),
+        method, headers: this.#headers({ sessionId: opts.sessionId, headers: opts.headers, contentType }),
         body: raw ? raw.body : body === undefined ? undefined : JSON.stringify(body), signal: opts.signal,
         // fetch sends a stream body only when told it is one-way.
         ...(raw && raw.body instanceof ReadableStream ? { duplex: 'half' } : {}),

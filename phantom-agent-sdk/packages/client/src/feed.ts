@@ -28,6 +28,8 @@ class Relay {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private chain: Promise<void> = Promise.resolve();
   private alive = true;
+  /** turn-end went out: anything the cut stream still emits is nobody's. */
+  private ended = false;
 
   constructor(private readonly backend: BackendClient, private readonly sessionId: string,
     private readonly onFailed: (reason: string) => void) {}
@@ -36,7 +38,7 @@ class Relay {
     this.send([{ event: 'turn-start', ...opening }]);
   }
   part(part: StreamPart): void {
-    if (!this.alive) return;
+    if (!this.alive || this.ended) return;
     this.buf.push({ event: 'part', part });
     if (!this.timer) this.timer = setTimeout(() => this.flush(), RELAY_FLUSH_MS);
   }
@@ -46,6 +48,7 @@ class Relay {
   turnEnd(): Promise<void> {
     this.flush();
     this.send([{ event: 'turn-end' }]);
+    this.ended = true;
     return this.chain;
   }
 

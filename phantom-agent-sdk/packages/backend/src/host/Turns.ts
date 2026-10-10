@@ -23,6 +23,7 @@ import type { ProjectRow, SessionRow } from '../storage/schema.js';
 import type { Sessions } from '../storage/Sessions.js';
 import type { Settings } from '../storage/Settings.js';
 import type { SessionEvents } from '../agents/SessionEvents.js';
+import type { ToolCalls } from '../agents/ToolCalls.js';
 import type { Runners } from './Runners.js';
 import type { Job, TurnJobResult } from './protocol.js';
 import { scopeOf } from '../lib/scopes.js';
@@ -43,6 +44,7 @@ export class Turns {
     private readonly runners: Runners,
     private readonly settings: Settings,
     private readonly events: SessionEvents,
+    private readonly toolCalls: ToolCalls,
   ) {}
 
   /** Start `spec` on a runner for a session nobody holds. `locked`: someone
@@ -52,16 +54,27 @@ export class Turns {
     if (!runner) return 'no_runner';
     const expires = await this.sessions.acquireLock(session, runner.id, await this.#ttl(project), runner.name);
     if (!expires) return 'locked';
-    return this.#dispatch(session, runner, spec, expires, 'placed');
+    this.events.publish(session.id, runner.id, { event: 'lock', locked: true, by: runner.id, label: runner.name,
+      agent: session.agent ?? null, expires_at: expires.toISOString() });
+    return this.#dispatch(session, runner, spec, 'placed');
   }
 
-  /** Move `from`'s held turn to a runner. `lost`: `from` no longer held it. */
-  async handoff(session: SessionRow, project: ProjectRow, from: string, spec: TurnSpec): Promise<PlacedTurn | 'no_runner' | 'lost'> {
+  /** Move `from`'s held turn to a runner. `lost`: `from` no longer held it.
+   *  Answers the moment the hold moved; the runner is sent the turn once no
+   *  server tool call is in flight on the session — a driver may leave mid
+   *  call, and the record must hold every result before the next driver
+   *  calls the model. */
+  async handoff(session: SessionRow, project: ProjectRow, from: string, spec: TurnSpec): Promise<{ runner: { id: string; name: string } } | 'no_runner' | 'lost'> {
     const runner = await this.runners.placeTurn(spec.actingFor.userId ?? null, spec.agentType);
     if (!runner) return 'no_runner';
     const expires = await this.sessions.transferLock(session.id, from, runner.id, runner.name, await this.#ttl(project));
     if (!expires) return 'lost';
-    return this.#dispatch(session, runner, spec, expires, `handed off from ${from}`);
+    this.events.publish(session.id, from, { event: 'lock', locked: true, by: runner.id, label: runner.name,
+      agent: session.agent ?? null, expires_at: expires.toISOString() });
+    const open = this.toolCalls.inFlight(session.id);
+    if (open) log.info({ session: session.id, runner: runner.name, open }, 'hand-off waits for the tool calls in flight');
+    void this.toolCalls.settled(session.id).then(() => this.#dispatch(session, runner, spec, `handed off from ${from}`));
+    return { runner: { id: runner.id, name: runner.name } };
   }
 
   async #ttl(project: ProjectRow): Promise<number> {
@@ -69,9 +82,7 @@ export class Turns {
   }
 
   #dispatch(session: SessionRow, runner: { id: string; name: string; turn(spec: TurnSpec & { sessionId: string }): Promise<TurnJobResult> },
-    spec: TurnSpec, expires: Date, how: string): PlacedTurn {
-    this.events.publish(session.id, runner.id, { event: 'lock', locked: true, by: runner.id, label: runner.name,
-      agent: session.agent ?? null, expires_at: expires.toISOString() });
+    spec: TurnSpec, how: string): PlacedTurn {
     log.info({ session: session.id, runner: runner.name, agent: spec.agentType, opening: spec.opening.length, how }, 'turn placed on a runner');
     const result = runner.turn({ ...spec, sessionId: session.id });
     result.then(
