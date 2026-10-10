@@ -3,7 +3,7 @@
 // fixed-column table: total, then agents and their rows, then helpers and
 // theirs. Cache is a percentage — the share of prompt tokens served from
 // cache — since the raw read/write counts say nothing on their own.
-/** The two kinds of model call: an agent's turn, or a one-shot the system
+/** The two groups of model call: an agent's turn, or a one-shot the system
  *  makes for itself (title, commit_message, compaction, session_digest). */
 export type TokenGroup = 'agent' | 'helper';
 const HELPER_TYPES = new Set(['title', 'commit_message', 'compaction', 'session_digest']);
@@ -12,8 +12,8 @@ import type { ReportRow, WindowTotals, Windows } from './TokenLog.js';
 import type { Clock } from '../lib/clock.js';
 
 // NUM_W: widest value `k` emits is 6 (`999.9B`), +4 gutter so columns never touch.
-const KIND_W = 14, MODEL_W = 22, NUM_W = 10;
-const LABEL_W = 2 + KIND_W + 2 + MODEL_W;  // indent, kind, gutter, model
+const TYPE_W = 14, MODEL_W = 22, NUM_W = 10;
+const LABEL_W = 2 + TYPE_W + 2 + MODEL_W;  // indent, type, gutter, model
 
 /** Window starts, from `now`: today's midnight in the builder's zone, and
  *  7 / 30 days back to the minute. */
@@ -59,9 +59,9 @@ function table(title: string, window: keyof Windows<unknown>, rows: ReportRow[])
       .sort((a, b) => (b[window].input + b[window].output) - (a[window].input + a[window].output));
     out.push(line(`${group}s`, mine.reduce((a, row) => add(a, row[window]), ZERO)));
     for (const row of mine) {
-      const kind = clip(row.type.replace(/_/g, ' '), KIND_W);
+      const type = clip(row.type.replace(/_/g, ' '), TYPE_W);
       const model = clip(modelName(row), MODEL_W);
-      out.push(line(`  ${kind.padEnd(KIND_W + 2)}${model}`, row[window]));
+      out.push(line(`  ${type.padEnd(TYPE_W + 2)}${model}`, row[window]));
     }
   }
   return out.join('\n');

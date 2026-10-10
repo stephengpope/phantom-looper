@@ -212,7 +212,7 @@ export class Deployment {
     return { restarting: service };
   }
 
-  /** The token report: today / 7 days / 30 days, per kind × model. "Today"
+  /** The token report: today / 7 days / 30 days, per type × model. "Today"
    *  is the clock's — the builder's midnight, not the container's. */
   async tokenUsage(clock: Clock, now = clock.now()): Promise<{ text: string }> {
     return { text: formatTokenReport(await this.tokenLog.report(reportWindows(clock, now)), clock, now) };

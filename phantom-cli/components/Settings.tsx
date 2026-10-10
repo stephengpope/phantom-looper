@@ -48,7 +48,7 @@ export interface Rows {
 
 type View =
   | { at: 'list' }
-  | { at: 'edit'; kind: 'server' | 'local'; key: string; spec: EditSpec };
+  | { at: 'edit'; store: 'server' | 'local'; key: string; spec: EditSpec };
 
 /** Rows that cannot apply right now, hidden rather than shown dead: an
  *  endpoint for a provider that has none, wake words while wake is off.
@@ -142,7 +142,7 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
     };
     const provider = providerForModelRow(key, values);
     const models = provider ? await loadModels(provider) : [];
-    setView({ at: 'edit', kind: 'server', key, spec: buildModelSpec(key, spec, values, models, server ?? {}) });
+    setView({ at: 'edit', store: 'server', key, spec: buildModelSpec(key, spec, values, models, server ?? {}) });
   };
 
   const openLocal = (key: LocalKey) => {
@@ -160,7 +160,7 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
     // still be typed (a device plugged in later, or a sidecar not running yet).
     const suggest = suggestions?.[key];
     if (suggest?.length) { spec.suggestions = suggest; spec.note = spec.note ?? 'devices found now · or type any device name'; }
-    setView({ at: 'edit', kind: 'local', key, spec });
+    setView({ at: 'edit', store: 'local', key, spec });
   };
 
   // ONE writer per home. After a write this screen re-reads and shows what was
@@ -179,7 +179,7 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
   if (view.at === 'edit') {
     // Suggestions are read live: a device list that arrives while the picker
     // is open (the re-scan onOpenRow asked for) replaces the one captured.
-    const fresh = view.kind === 'local' ? suggestions?.[view.key as LocalKey] : undefined;
+    const fresh = view.store === 'local' ? suggestions?.[view.key as LocalKey] : undefined;
     const spec = fresh?.length ? { ...view.spec, suggestions: fresh } : view.spec;
     return (
       <ValueInput
@@ -187,7 +187,7 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
         onCancel={() => setView({ at: 'list' })}
         onSubmit={(value) => {
           setView({ at: 'list' });
-          if (view.kind === 'local') { void writeLocal(view.key as LocalKey, value as ConfigValue); return; }
+          if (view.store === 'local') { void writeLocal(view.key as LocalKey, value as ConfigValue); return; }
           // A provider change invalidates its model — the old id belongs to
           // the old provider's catalog. Clear it in the same write so the row
           // shows "—" (= newest for the new provider) rather than a stale id.
@@ -279,7 +279,7 @@ export interface CatalogModel { id: string; name: string }
 
 /** Every model row and the provider row it follows — its own when overridden,
  *  else the coding agent's it cascades to. The same picker on every screen:
- *  the three are the same kind of row. */
+ *  the three are the same row. */
 export const MODEL_ROWS: Record<string, string> = {
   coding_model: 'coding_provider', assistant_model: 'assistant_provider',
   supervisor_model: 'supervisor_provider',

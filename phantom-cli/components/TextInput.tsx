@@ -1,6 +1,6 @@
 // The two text boxes, ours: TextInput (one line) and TextArea (wrapping).
 //
-// TWO KINDS, BY NAME. A TextInput is a single line — a filter, a name, a
+// TWO COMPONENTS, BY NAME. A TextInput is a single line — a filter, a name, a
 // secret: you type, backspace, enter. It never touches the arrow keys, so
 // the screen around it keeps them (/resume's ←→ cycle the project while
 // the filter line is open). A TextArea is prose — the message prompt, a

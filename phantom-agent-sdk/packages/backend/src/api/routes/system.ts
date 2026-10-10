@@ -122,7 +122,7 @@ export function systemRoutes(app: FastifyInstance, backend: PhantomBackend): voi
   });
 
   // One query over token_usage for today / last 7 days / last 30 days, per
-  // kind × model; tokenReport.ts lays it out.
+  // type × model; tokenReport.ts lays it out.
   app.get('/system/token-usage', {
     config: SERVICE_ROLE,
     schema: { ...TAG,

@@ -37,7 +37,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
    *  deepest named is written. Verifying each id exists is what stops a
    *  typo becoming an override nothing will ever read — the row would be
    *  perfectly valid and perfectly dead. A project brings its organization. */
-  type Scope = { error: string } | { scope: SettingScope; write: string; kind: Layer };
+  type Scope = { error: string } | { scope: SettingScope; write: string; layer: Layer };
   async function scopeFor(req: FastifyRequest<{ Querystring: ScopeQuery }>): Promise<Scope> {
     const query = req.query;
     const own = ownLayers(req.caller, query);
@@ -56,8 +56,8 @@ export function settingsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       if (!project) return { error: `no project ${query.project}` };
       scope = { ...scope, ...scopeOf(project) };
     }
-    const kind: Layer = query.project ? 'project' : query.user ? 'user' : query.organization ? 'organization' : 'global';
-    return { scope, write: scopeNames(scope)[kind] ?? GLOBAL, kind };
+    const layer: Layer = query.project ? 'project' : query.user ? 'user' : query.organization ? 'organization' : 'global';
+    return { scope, write: scopeNames(scope)[layer] ?? GLOBAL, layer };
   }
 
   app.get<{ Querystring: ScopeQuery }>(
@@ -73,7 +73,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       const out: Record<string, unknown> = {};
       for (const [key, entry] of Object.entries(entries)) {
         // A project-only key has no global meaning — the global list omits it.
-        if (where.kind === 'global' && !ctx.settings.isGlobalSettable(key)) continue;
+        if (where.layer === 'global' && !ctx.settings.isGlobalSettable(key)) continue;
         // A user sees what they could act on: keys settable below global.
         // The server's own (limits, mail, the console) are the service role's.
         if (req.caller?.type === 'user' && !ctx.settings.overridableAt(key).length) continue;
@@ -99,7 +99,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       if ('error' in scope) return reply.code(404).send(err('not_found', scope.error));
       let updated: string[];
       try {
-        updated = await ctx.settings.writeAtScope(scope.kind, scope.write, req.body ?? {}, writerOf(req));
+        updated = await ctx.settings.writeAtScope(scope.layer, scope.write, req.body ?? {}, writerOf(req));
       } catch (error) {
         if (error instanceof SettingsWriteError) return error.code === 'fixed' ? reply.code(403).send(err('access_denied', 'access denied')) : reply.code(400).send(err(error.code, error.message));
         throw error;

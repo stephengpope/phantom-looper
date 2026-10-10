@@ -333,8 +333,8 @@ const restoreConsole = (): void => {
 // memory is not a throw — V8 aborts from C++ and no handler runs; only the
 // terminal's own "FATAL ERROR" line records it.
 let screenUp: { unmount(): void } | null = null;
-const onCrash = (kind: string) => (err: unknown): void => {
-  const text = `${kind}: ${err instanceof Error ? err.stack ?? err.message : format(err)}`;
+const onCrash = (event: string) => (err: unknown): void => {
+  const text = `${event}: ${err instanceof Error ? err.stack ?? err.message : format(err)}`;
   toLog(text);
   try { screenUp?.unmount(); } catch { /* the screen is what is broken */ }
   const lateReply = screen.stopAudit();

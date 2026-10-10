@@ -47,18 +47,18 @@ const NOT_HEARD: Record<Extract<Transcription, { error: string }>['error'], stri
   vendor: "🎤 Deepgram couldn't transcribe that — send it again.",
 };
 
-const MEDIA_FIELDS: Array<{ field: string; kind?: 'image' | 'video' | 'audio' }> = [
-  { field: 'photo', kind: 'image' }, { field: 'document' },
-  { field: 'video', kind: 'video' }, { field: 'video_note', kind: 'video' },
-  { field: 'animation', kind: 'video' }, { field: 'audio', kind: 'audio' },
+const MEDIA_FIELDS: Array<{ field: string; type?: 'image' | 'video' | 'audio' }> = [
+  { field: 'photo', type: 'image' }, { field: 'document' },
+  { field: 'video', type: 'video' }, { field: 'video_note', type: 'video' },
+  { field: 'animation', type: 'video' }, { field: 'audio', type: 'audio' },
 ];
 /** The file-bearing fields of a message, each resolved to its largest size. */
-export function collectFiles(msg: any): Array<{ file: any; kind?: 'image' | 'video' | 'audio' }> {
-  const out: Array<{ file: any; kind?: 'image' | 'video' | 'audio' }> = [];
-  for (const { field, kind } of MEDIA_FIELDS) {
+export function collectFiles(msg: any): Array<{ file: any; type?: 'image' | 'video' | 'audio' }> {
+  const out: Array<{ file: any; type?: 'image' | 'video' | 'audio' }> = [];
+  for (const { field, type } of MEDIA_FIELDS) {
     const value = msg?.[field];
     if (!value) continue;
-    out.push({ file: Array.isArray(value) ? value[value.length - 1] : value, kind });
+    out.push({ file: Array.isArray(value) ? value[value.length - 1] : value, type });
   }
   return out;
 }
@@ -396,13 +396,13 @@ export class TelegramBot {
     if (!files.length) return null;
     const scratch = (await this.deps.hosts.of(sessionId)).files(sessionId);
     const stored: StoredAttachment[] = [];
-    for (const { file, kind } of files) {
+    for (const { file, type } of files) {
       if (file.file_size && file.file_size > MAX_INBOUND_BYTES) {
         await api.sendMessage(chatId, `⚠️ "${file.file_name ?? 'that file'}" is over Telegram's 20 MB limit.`);
         continue;
       }
       const a = await writeAttachment(scratch, await api.downloadFile(file.file_id),
-        { filename: file.file_name, mimeType: file.mime_type, defaultKind: kind });
+        { filename: file.file_name, mimeType: file.mime_type, defaultType: type });
       if (a) stored.push(a);
     }
     if (!stored.length) return null;

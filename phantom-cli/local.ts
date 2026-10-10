@@ -4,7 +4,7 @@
 //
 // Everything else is on the server (settings.ts), so every cli you open is the
 // same one. Reads here are synchronous because a file read is; a call site can
-// tell which kind it is by whether it awaits.
+// tell which store it reads by whether it awaits.
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { SERVICE_ROLE_KEY_PREFIX, USER_ROLE_KEY_PREFIX } from '@phantom-agent-sdk/client';
 import { dirname } from 'node:path';

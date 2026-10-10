@@ -24,7 +24,7 @@ export const WEB_TOOLS: ToolDef[] = [
         '"cdr:1,cd_min:MM/DD/YYYY,cd_max:MM/DD/YYYY" = exact range; prefix "sbd:1," to sort ' +
         'newest first (e.g. "sbd:1,qdr:w")' },
       categories: { type: 'array', minItems: 1, maxItems: 3, items: { type: 'string', enum: ['github', 'research', 'pdf', 'developer'] },
-        description: 'only this kind of result: "github" = repos and code, ' +
+        description: 'only this type of result: "github" = repos and code, ' +
           '"research" = papers, "pdf" = PDF documents, "developer" = developer docs ' +
           '("developer" cannot combine with the others)' },
       includeDomains: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string' },

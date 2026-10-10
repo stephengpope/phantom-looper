@@ -78,7 +78,7 @@ export const boardScreen = (store: WindowStore, projectId: string,
       // The card editor's Session row: back to chat, then the one open
       // path — already loaded switches, otherwise it opens (read-only
       // while the looper holds it, like /resume).
-      onOpenSession={(id) => { store.dismissOverlay(); void store.openSession({ kind: 'open', id }); }}
+      onOpenSession={(id) => { store.dismissOverlay(); void store.openSession({ action: 'open', id }); }}
       // [v]: the archive. Off the board first, so a failed fetch's note
       // lands where you can read it.
       onArchived={() => { store.dismissOverlay(); void store.openArchived(projectId); }} />
@@ -212,10 +212,10 @@ export const pickerScreen = (store: WindowStore, which: 'project' | 'resume'): O
     onTrash={(id) => { void store.trashSession(id); }}
     onCancel={store.dismissOverlay}
     onPick={(launch) => {
-      if (launch.kind === 'add') { store.startAddProject(); return; }
+      if (launch.action === 'add') { store.startAddProject(); return; }
       store.dismissOverlay();
-      void store.openSession(launch.kind === 'new'
-        ? { kind: 'new', projectId: launch.projectId }
-        : { kind: 'open', id: launch.sessionId });
+      void store.openSession(launch.action === 'new'
+        ? { action: 'new', projectId: launch.projectId }
+        : { action: 'open', id: launch.sessionId });
     }} /> : null
 ), which === 'resume' ? { watch: store.watchPicker } : {});

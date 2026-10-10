@@ -70,44 +70,44 @@ export function autoLabel(value: boolean | null, fallback: boolean, source?: str
 const tickable = (list: ListName) => list === 'requirements';
 /** A prose row edits in a TextArea (wraps, owns the arrows); the title is
  *  the one single-line field. */
-const prose = (row: Row) => row.kind === 'item' || (row.kind === 'field' && row.field !== 'title');
+const prose = (row: Row) => row.type === 'item' || (row.type === 'field' && row.field !== 'title');
 
 type Row =
-  | { kind: 'field'; field: 'title' | 'blocked' | 'resolution' }
-  | { kind: 'status' }
-  | { kind: 'item'; list: ListName; index: number }
-  | { kind: 'empty'; list: ListName }
-  | { kind: 'pinned' }
-  | { kind: 'archived' }
-  | { kind: 'auto'; field: AutoField }
-  | { kind: 'session' };
+  | { type: 'field'; field: 'title' | 'blocked' | 'resolution' }
+  | { type: 'status' }
+  | { type: 'item'; list: ListName; index: number }
+  | { type: 'empty'; list: ListName }
+  | { type: 'pinned' }
+  | { type: 'archived' }
+  | { type: 'auto'; field: AutoField }
+  | { type: 'session' };
 
 const rowKey = (row: Row) =>
-  row.kind === 'field' ? row.field : row.kind === 'archived' ? 'archived'
-  : row.kind === 'status' ? 'status'
-  : row.kind === 'pinned' ? 'pinned'
-  : row.kind === 'session' ? 'session'
-  : row.kind === 'auto' ? row.field
-  : row.kind === 'empty' ? `${row.list}+` : `${row.list}:${row.index}`;
+  row.type === 'field' ? row.field : row.type === 'archived' ? 'archived'
+  : row.type === 'status' ? 'status'
+  : row.type === 'pinned' ? 'pinned'
+  : row.type === 'session' ? 'session'
+  : row.type === 'auto' ? row.field
+  : row.type === 'empty' ? `${row.list}+` : `${row.list}:${row.index}`;
 
 /** Blocked is the STATUS — the reason row shows only for cards in the
  *  blocked column, where typing the why is the point. */
 const showBlocked = (_draft: Draft, status: string) => status === 'blocked';
 
 function buildRows(draft: Draft, status: string): Row[] {
-  const rows: Row[] = [{ kind: 'field', field: 'title' }, { kind: 'status' }];
+  const rows: Row[] = [{ type: 'field', field: 'title' }, { type: 'status' }];
   for (const { list } of SECTIONS) {
     const count = draft[list].length;
-    if (count === 0) rows.push({ kind: 'empty', list });
-    else for (let i = 0; i < count; i++) rows.push({ kind: 'item', list, index: i });
+    if (count === 0) rows.push({ type: 'empty', list });
+    else for (let i = 0; i < count; i++) rows.push({ type: 'item', list, index: i });
   }
-  if (showBlocked(draft, status)) rows.push({ kind: 'field', field: 'blocked' }, { kind: 'field', field: 'resolution' });
+  if (showBlocked(draft, status)) rows.push({ type: 'field', field: 'blocked' }, { type: 'field', field: 'resolution' });
   // The loop block reads cause before effect: the two switches that decide
   // whether the looper runs this card, then the session that running it made.
   // Archived stays the bottom row; Pinned sits directly above it.
-  rows.push({ kind: 'auto', field: 'auto_plan' }, { kind: 'auto', field: 'auto_build' },
-    { kind: 'session' },
-    { kind: 'pinned' }, { kind: 'archived' });
+  rows.push({ type: 'auto', field: 'auto_plan' }, { type: 'auto', field: 'auto_build' },
+    { type: 'session' },
+    { type: 'pinned' }, { type: 'archived' });
   return rows;
 }
 
@@ -367,8 +367,8 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
     const row = rowsNow[Math.min(atRef.current, rowsNow.length - 1)];
     if (isMouseInput(char)) {
       const mouse = parseMouse(char);
-      if (mouse?.kind === 'wheel' && mouse.x < width) { scrollTo(scrollRef.current + mouse.button * 3); return; }
-      if (mouse?.kind !== 'press' || mouse.button !== 0 || mouse.x >= width) return;
+      if (mouse?.type === 'wheel' && mouse.x < width) { scrollTo(scrollRef.current + mouse.button * 3); return; }
+      if (mouse?.type !== 'press' || mouse.button !== 0 || mouse.x >= width) return;
       // A row scrolled out of the viewport is not on screen to be clicked,
       // however its layout box measures.
       const view = viewRef.current ? measureElement(viewRef.current) : null;
@@ -380,15 +380,15 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
         if (mouse.x >= measured.x && mouse.x < measured.x + measured.width && mouse.y >= measured.y && mouse.y < measured.y + measured.height) {
           const hitRow = rowsNow[i];
           setAt(i);
-          if (hitRow.kind === 'archived') setDraft((draft) => ({ ...draft, archived: !draft.archived }));
-          if (hitRow.kind === 'pinned') setDraft((draft) => ({ ...draft, pinned: !draft.pinned }));
-          if (hitRow.kind === 'status') cycleStatus();
-          if (hitRow.kind === 'auto') setDraft((draft) => ({ ...draft, [hitRow.field]: cycleAuto(draft[hitRow.field]) }));
-          if (hitRow.kind === 'session' && cardSession && onOpenSession) { flush(); onOpenSession(cardSession.id); }
+          if (hitRow.type === 'archived') setDraft((draft) => ({ ...draft, archived: !draft.archived }));
+          if (hitRow.type === 'pinned') setDraft((draft) => ({ ...draft, pinned: !draft.pinned }));
+          if (hitRow.type === 'status') cycleStatus();
+          if (hitRow.type === 'auto') setDraft((draft) => ({ ...draft, [hitRow.field]: cycleAuto(draft[hitRow.field]) }));
+          if (hitRow.type === 'session' && cardSession && onOpenSession) { flush(); onOpenSession(cardSession.id); }
           // The [ ] box renders right-justified inside the 12-column label
           // gutter — a click anywhere in that gutter ticks; on the text, it
           // just focuses.
-          if (hitRow.kind === 'item' && tickable(hitRow.list) && mouse.x < measured.x + 13) toggle(hitRow.list, hitRow.index);
+          if (hitRow.type === 'item' && tickable(hitRow.list) && mouse.x < measured.x + 13) toggle(hitRow.list, hitRow.index);
           return;
         }
       }
@@ -403,29 +403,29 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
     // ctrl+e — measured with `npm run keys` on the user's terminal, which
     // delivers only ctrl+e r l f d n v; t/k/y are eaten. ctrl+t kept as a
     // silent extra for terminals that do pass it.
-    if (key.ctrl && (char === 'e' || char === 't') && row.kind === 'item' && tickable(row.list)) { toggle(row.list, row.index); return; }
-    if (row.kind === 'auto') {
+    if (key.ctrl && (char === 'e' || char === 't') && row.type === 'item' && tickable(row.list)) { toggle(row.list, row.index); return; }
+    if (row.type === 'auto') {
       if (key.return || char === ' ') { setDraft((draft) => ({ ...draft, [row.field]: cycleAuto(draft[row.field]) })); return; }
     }
-    if (row.kind === 'status') {
+    if (row.type === 'status') {
       if (key.return || char === ' ') cycleStatus();
       return;
     }
-    if (row.kind === 'session') {
+    if (row.type === 'session') {
       if (key.return && cardSession && onOpenSession) { flush(); onOpenSession(cardSession.id); }
       return;
     }
-    if (row.kind === 'pinned') {
+    if (row.type === 'pinned') {
       if (key.return || char === ' ') setDraft((draft) => ({ ...draft, pinned: !draft.pinned }));
       return;
     }
-    if (row.kind === 'archived') {
+    if (row.type === 'archived') {
       if (key.return || char === ' ') setDraft((draft) => ({ ...draft, archived: !draft.archived }));
       return;
     }
     // Backspace on an EMPTY line removes it (the TextInput has nothing to
     // delete, so the key means the line itself).
-    if ((key.backspace || key.delete) && row.kind === 'item' && !itemText(draftRef.current[row.list][row.index])) {
+    if ((key.backspace || key.delete) && row.type === 'item' && !itemText(draftRef.current[row.list][row.index])) {
       setList(row.list, (value) => value.filter((_, j) => j !== row.index));
       setAt(Math.max(0, atRef.current - 1));
     }
@@ -460,7 +460,7 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
   );
 
   const fieldRow = (field: 'title' | 'blocked' | 'resolution', name: string, placeholder: string, next: () => void) => (
-    <Box ref={ref({ kind: 'field', field })}>
+    <Box ref={ref({ type: 'field', field })}>
       {label(name, field)}
       {field === 'blocked' && draft.blocked && focusedKey !== field
         ? <Text color="red" wrap="wrap">{draft.blocked}</Text>
@@ -483,7 +483,7 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
       <Box marginTop={1} flexDirection="column">
         {fieldRow('title', 'Title', 'the card, in a line', () => move(1))}
       </Box>
-      <Box marginTop={1} ref={ref({ kind: 'status' })}>
+      <Box marginTop={1} ref={ref({ type: 'status' })}>
         {label('Status', 'status')}
         <Text color={focusedKey === 'status' ? 'cyan' : undefined} dimColor={focusedKey !== 'status'}>
           {card.status.replace(/_/g, ' ')}
@@ -508,7 +508,7 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
             {items.map((item, i) => {
               const key = `${list}:${i}`;
               return (
-                <Box key={i} ref={ref({ kind: 'item', list, index: i })}>
+                <Box key={i} ref={ref({ type: 'item', list, index: i })}>
                   <Box width={12} flexShrink={0} justifyContent="flex-end">
                     <Text color={focusedKey === key ? 'cyan' : undefined} dimColor={focusedKey !== key}>
                       {focusedKey === key ? '❯ ' : ''}{tickable(list)
@@ -536,7 +536,7 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
       ] as const).map(([field, name, fallback, source]) => (
         // Every card feature keeps a blank line above the next — same rhythm
         // as every other section of the page.
-        <Box key={field} marginTop={1} ref={ref({ kind: 'auto', field })}>
+        <Box key={field} marginTop={1} ref={ref({ type: 'auto', field })}>
           {label(name, field)}
           <Text color={(draft[field] ?? fallback) ? 'green' : undefined}
             dimColor={!(draft[field] ?? fallback)}>
@@ -545,21 +545,21 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
           {focusedKey === field ? <Text dimColor> · [enter] card → on → off</Text> : null}
         </Box>
       ))}
-      <Box marginTop={1} ref={ref({ kind: 'session' })}>
+      <Box marginTop={1} ref={ref({ type: 'session' })}>
         {label('Session', 'session')}
         {cardSession
           ? <Text wrap="truncate" color={focusedKey === 'session' ? 'cyan' : undefined}>{cardSession.name ?? 'unnamed'}</Text>
           : <Text dimColor>none — appears when the looper runs the card</Text>}
         {cardSession && focusedKey === 'session' ? <Text dimColor> · [enter] opens</Text> : null}
       </Box>
-      <Box marginTop={1} ref={ref({ kind: 'pinned' })}>
+      <Box marginTop={1} ref={ref({ type: 'pinned' })}>
         {label('Pinned', 'pinned')}
         <Text dimColor={!draft.pinned} color={draft.pinned ? 'cyan' : undefined}>
           {draft.pinned ? 'yes — top of its column' : 'no'}
         </Text>
         {focusedKey === 'pinned' ? <Text dimColor> · [enter] toggles</Text> : null}
       </Box>
-      <Box marginTop={1} ref={ref({ kind: 'archived' })}>
+      <Box marginTop={1} ref={ref({ type: 'archived' })}>
         {label('Archived', 'archived')}
         <Text dimColor={!draft.archived} color={draft.archived ? 'yellow' : undefined}>
           {draft.archived ? 'yes — off the board' : 'no'}

@@ -314,11 +314,11 @@ export function partsFromHistory(messages: ModelMessage[]): Part[] {
   const out: Part[] = [];
   for (const message of messages) {
     if (message.role === 'user' && typeof message.content === 'string') {
-      out.push({ kind: 'user', id: nextId('vuser'), text: message.content });
+      out.push({ type: 'user', id: nextId('vuser'), text: message.content });
     } else if (message.role === 'assistant') {
       const text = typeof message.content === 'string' ? message.content
         : message.content.filter((part) => part.type === 'text').map((part) => (part as { type: 'text'; text: string }).text).join('');
-      if (text.trim()) out.push({ kind: 'text', id: nextId('vtext'), text: text.trim(), done: true });
+      if (text.trim()) out.push({ type: 'text', id: nextId('vtext'), text: text.trim(), done: true });
     }
   }
   return out;
@@ -425,11 +425,11 @@ export class VoiceClient {
   handlers(): { onError(error: PhantomError): void; onNotice(notice: { type: string; text: string }): void } {
     return {
       onError: (error) => {
-        this.reply = [...this.reply, { kind: 'error', id: nextId('verr'), message: error.message }];
+        this.reply = [...this.reply, { type: 'error', id: nextId('verr'), message: error.message }];
         this.paintLive();
         setTimeout(() => { if (this.cur && !this.agent?.busy) this.turnSettled(); }, 0);
       },
-      onNotice: (notice) => { if (notice.type !== 'retry') this.note({ kind: 'note', id: nextId('vnote'), text: notice.text }); },
+      onNotice: (notice) => { if (notice.type !== 'retry') this.note({ type: 'note', id: nextId('vnote'), text: notice.text }); },
     };
   }
 
@@ -526,10 +526,10 @@ export class VoiceClient {
   turn(text: string): void {
     text = text.trim();
     if (!text) return;
-    this.note({ kind: 'user', id: nextId('vuser'), text });
+    this.note({ type: 'user', id: nextId('vuser'), text });
     if (this.intercept?.(text)) return;
     if (!this.agent) {
-      this.note({ kind: 'error', id: nextId('verr'), message: 'the Assistant has no session yet — open a project' });
+      this.note({ type: 'error', id: nextId('verr'), message: 'the Assistant has no session yet — open a project' });
       return;
     }
     if (this.agent.busy) this.agent.interrupt();
@@ -570,7 +570,7 @@ export class VoiceClient {
     this.agent?.partialMessage(spoken.text);
     // The pane: trim what is on screen to what was heard.
     const trim = (parts: Part[]) => {
-      const last = [...parts].reverse().find((partial) => partial.kind === 'text');
+      const last = [...parts].reverse().find((partial) => partial.type === 'text');
       return parts.map((partial) => (partial === last ? { ...partial, text: spoken.text } : partial));
     };
     if (this.cur === turn) this.reply = trim(this.reply);
@@ -642,10 +642,10 @@ export class VoiceClient {
         this.set({ devices: msg.devices });
         return;
       case 'warn':
-        this.note({ kind: 'error', id: nextId('verr'), message: msg.message });
+        this.note({ type: 'error', id: nextId('verr'), message: msg.message });
         return;
       case 'error':
-        this.note({ kind: 'error', id: nextId('verr'), message: msg.message });
+        this.note({ type: 'error', id: nextId('verr'), message: msg.message });
         this.set({ status: 'error', detail: msg.message });
         return;
     }
@@ -655,7 +655,7 @@ export class VoiceClient {
     const out: Part[] = [];
     if (this.partial) {
       const text = joinSpeech(this.partial.heard, this.partial.interim);
-      if (text) out.push({ kind: 'user', id: this.partial.id, text });
+      if (text) out.push({ type: 'user', id: this.partial.id, text });
     }
     out.push(...this.reply);
     return out;

@@ -61,7 +61,7 @@ export function windowHost(win: WindowStore, deps: {
     // here, needs attaching, or (swept) needs restarting. Then the chat view:
     // the builder sees the session regardless of which screen was up.
     onSwitch: async (id) => {
-      const ok = await win.openSession({ kind: 'open', id });
+      const ok = await win.openSession({ action: 'open', id });
       if (!ok) {
         return { error: `could not open session ${id} — check the id against session_list; ` +
           'the conversation pane says what went wrong' };
@@ -76,7 +76,7 @@ export function windowHost(win: WindowStore, deps: {
       return win.requestApproval(ask, signal);
     },
     onProjectCreated: async (projectId) => {
-      const opened = await win.openSession({ kind: 'new', projectId });
+      const opened = await win.openSession({ action: 'new', projectId });
       return opened ? { session: store.activeId } : { error: 'the conversation pane says why' };
     },
   };

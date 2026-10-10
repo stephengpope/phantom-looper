@@ -7,7 +7,7 @@
 -- seat 'cron'), runs the prompt as one coding turn, and closes it. The
 -- session is the run's record.
 --
--- Two kinds. RECURRING: `schedule` is a 5-field cron expression ("0 9 * * *")
+-- Two types. RECURRING: `schedule` is a 5-field cron expression ("0 9 * * *")
 -- and the row lives until removed. ONE-TIME (`once`): `schedule` is an ISO
 -- datetime ("2026-03-14T18:50:00"), one moment ever; the row fires and is
 -- deleted (or is deleted unfired when the server slept through its moment).

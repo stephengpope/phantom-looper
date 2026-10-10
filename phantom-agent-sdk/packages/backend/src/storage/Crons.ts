@@ -4,7 +4,7 @@
 // (crons/engine.ts) fires with, so "is this valid" and "when does it fire"
 // cannot disagree.
 //
-// Two kinds of cron. RECURRING: `schedule` is a cron expression and the row
+// Two cron types. RECURRING: `schedule` is a cron expression and the row
 // lives until removed. ONE-TIME (`once`): `schedule` is an ISO datetime — a
 // reminder, a check-in later tonight — one moment ever; the row is deleted
 // when it fires. `once` is decided here from the schedule's shape, never

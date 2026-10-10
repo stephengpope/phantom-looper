@@ -66,7 +66,7 @@ export const clientOf = (req: FastifyRequest): string => {
   const header = req.headers['x-phantom-client'];
   return typeof header === 'string' ? header : '';
 };
-/** WHAT KIND of driver the client is (x-phantom-actor): an automation's
+/** WHAT TYPE of driver the client is (x-phantom-actor): an automation's
  *  own name, or a person when unsaid. What a session records as started_by
  *  and last_turn_by; WHICH user is the row's user_id / last_turn_user_id,
  *  stamped from the request. Only the service role names an automation: a
@@ -498,7 +498,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       const workspaceId = workspaceOf(session);
       const a = await writeAttachment((await ctx.runners.of(workspaceId)).files(workspaceId), data, { filename: req.body.name });
       if (!a) return reply.code(422).send(err('invalid_args', 'the file claims to be an image but is not one', true));
-      return ok({ path: a.containerPath, kind: a.kind, name: a.displayName });
+      return ok({ path: a.containerPath, type: a.type, name: a.displayName });
     });
 
   // ---- duplicate -----------------------------------------------------------
@@ -760,7 +760,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         ...(systemPrompt ? { system_prompt: systemPrompt } : {}) });
     });
 
-  // The end of a turn, whoever ran it, for every kind of session: the turn
+  // The end of a turn, whoever ran it, for every session, whatever drives it: the turn
   // count (leaving 0 freezes the row's model), the agent seat after the
   // writer, and the auto-title on its cadence — what the whole-file save did
   // for a coding session, now that the record is appended as the turn runs.

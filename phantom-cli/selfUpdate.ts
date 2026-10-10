@@ -82,10 +82,10 @@ export function checksumFor(checksums: string, asset: string): string | null {
 
 // ── the versions folder ─────────────────────────────────────────────────────
 
-// Work folders inside app/, all `.<kind>-<pid>`: staging (an unpack in
+// Work folders inside app/, all `.<name>-<pid>`: staging (an unpack in
 // progress), old (a folder being replaced). The pid says whose; a dead pid's
 // folder is anyone's to delete.
-const scratch = (appRoot: string, kind: string) => join(appRoot, `.${kind}-${process.pid}`);
+const scratch = (appRoot: string, name: string) => join(appRoot, `.${name}-${process.pid}`);
 const scratchPid = (name: string): number | null => { const match = /^\.[a-z]+-(\d+)/.exec(name); return match ? Number(match[1]) : null; };
 
 /** The version a launcher link points at, or null when there is no link or

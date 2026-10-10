@@ -57,7 +57,7 @@ const MIME_EXT: Record<string, string> = {
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-export type MediaKind = 'image' | 'video' | 'audio' | 'document';
+export type AttachmentType = 'image' | 'video' | 'audio' | 'document';
 
 /** The image's real format, from its bytes — or null when it isn't one. */
 export function sniffImageMime(data: Buffer): string | null {
@@ -79,21 +79,21 @@ export function safeName(filename: string | undefined): string {
   return name.replace(/[^\w.\- ]/g, '_');
 }
 
-/** image | video | audio | document; `defaultKind` breaks ties for a
+/** image | video | audio | document; `defaultType` breaks ties for a
  *  nameless upload (a native photo has neither name nor mime). `document`
  *  stays unbiased: Telegram uses it for anything from the file picker. */
-export function classify(ext: string, mime: string | undefined, defaultKind?: MediaKind): MediaKind {
+export function classify(ext: string, mime: string | undefined, defaultType?: AttachmentType): AttachmentType {
   const mimeType = String(mime || '').toLowerCase();
-  if (mimeType.startsWith('image/') || ext in IMAGE_EXT_MIME || defaultKind === 'image') return 'image';
-  if (mimeType.startsWith('video/') || VIDEO_EXTS.has(ext) || defaultKind === 'video') return 'video';
-  if (mimeType.startsWith('audio/') || AUDIO_EXTS.has(ext) || defaultKind === 'audio') return 'audio';
+  if (mimeType.startsWith('image/') || ext in IMAGE_EXT_MIME || defaultType === 'image') return 'image';
+  if (mimeType.startsWith('video/') || VIDEO_EXTS.has(ext) || defaultType === 'video') return 'video';
+  if (mimeType.startsWith('audio/') || AUDIO_EXTS.has(ext) || defaultType === 'audio') return 'audio';
   return 'document';
 }
 
 export interface StoredAttachment {
   /** CONTAINER path — what the note tells the agent, what its tools open. */
   containerPath: string;
-  kind: MediaKind;
+  type: AttachmentType;
   displayName: string;
   /** Contents, for small text files; the note says so when set. */
   inlineText?: string;
@@ -109,19 +109,19 @@ export interface StoredAttachment {
 export async function writeAttachment(
   files: WorkspaceFiles,
   data: Buffer,
-  opts: { filename?: string; mimeType?: string; defaultKind?: MediaKind } = {},
+  opts: { filename?: string; mimeType?: string; defaultType?: AttachmentType } = {},
 ): Promise<StoredAttachment | null> {
   const ext = path.extname(opts.filename ?? '').toLowerCase();
-  const kind = classify(ext, opts.mimeType, opts.defaultKind);
-  const sniffed = kind === 'image' ? sniffImageMime(data) : null;
-  if (kind === 'image' && !sniffed) return null;
+  const type = classify(ext, opts.mimeType, opts.defaultType);
+  const sniffed = type === 'image' ? sniffImageMime(data) : null;
+  if (type === 'image' && !sniffed) return null;
 
   const fallbackExt = ext
     || (sniffed && MIME_EXT[sniffed])
-    || (kind === 'image' ? '.jpg' : kind === 'video' ? '.mp4' : kind === 'audio' ? '.ogg' : '.bin');
-  const displayName = opts.filename ? safeName(opts.filename) : `${kind}${fallbackExt}`;
+    || (type === 'image' ? '.jpg' : type === 'video' ? '.mp4' : type === 'audio' ? '.ogg' : '.bin');
+  const displayName = opts.filename ? safeName(opts.filename) : `${type}${fallbackExt}`;
   const unique = crypto.randomBytes(6).toString('hex');
-  const fileName = `${kind}_${unique}_${displayName}`;
+  const fileName = `${type}_${unique}_${displayName}`;
 
   // safeName stripped separators; this is the check that keeps a crafted
   // filename inside the dir if that ever changes.
@@ -131,7 +131,7 @@ export async function writeAttachment(
   await files.write(`scratch/${fileName}`, data);
 
   const out: StoredAttachment = {
-    containerPath: `/workspace/scratch/${fileName}`, kind, displayName,
+    containerPath: `/workspace/scratch/${fileName}`, type, displayName,
   };
   const resolvedMime = sniffed || opts.mimeType || '';
   if ((TEXT_INLINE_EXTS.has(ext) || resolvedMime.startsWith('text/')) && data.length <= MAX_TEXT_INLINE_BYTES) {
@@ -141,17 +141,17 @@ export async function writeAttachment(
 }
 
 function note(a: StoredAttachment): string {
-  if (a.kind === 'image') {
+  if (a.type === 'image') {
     return `[The user sent an image: '${a.displayName}'. It is saved at: ${a.containerPath}. `
       + 'Read that file with your read tool to LOOK at it before answering — do not guess at its contents.]';
   }
-  if (a.kind === 'video') {
+  if (a.type === 'video') {
     return `[The user sent a video: '${a.displayName}'. It is saved at: ${a.containerPath}. `
       + 'Its content is not inlined here. If the request involves what the video contains, inspect or '
       + 'process it yourself — for example with a media tool in bash — instead of asking the user to '
       + 'describe it. Only ask what to do with it if their intent is genuinely unclear.]';
   }
-  if (a.kind === 'audio') {
+  if (a.type === 'audio') {
     return `[The user sent an audio file: '${a.displayName}'. It is saved at: ${a.containerPath}. `
       + 'Its content is not inlined here. If the request involves what the audio contains, transcribe or '
       + 'process it yourself instead of asking the user to describe it. Only ask what to do with it if '

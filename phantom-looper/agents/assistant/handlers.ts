@@ -123,7 +123,7 @@ export function sessionsHandler(host: AssistantHost) {
           card_status: session.cardStatus ?? null,
           // Supervisor rows are MARKED, not hidden: a list that silently
           // drops half of itself is a list that lies.
-          kind: whoDrives(session),
+          driver: whoDrives(session),
           status: session.status === 'active' ? 'active' : 'ended',
           running: isRunning(session, { busy: host.busy, clientId: host.clientId }),
           on_screen: session.id === on_screen,

@@ -26,7 +26,7 @@ export const phantomAgentSdk = pgSchema('phantom_agent_sdk');
 
 // ONE store for settings and secrets — a row is (scope, namespace, key).
 // `namespace` separates the declared settings world ('general' — every key
-// declared in code; a credential is the same kind of row with its value in
+// declared in code; a credential is the same row with its value in
 // value_enc) from user-named secrets ('secret' — free names, token in
 // value_enc, description in plain value). The CHECK constraints (in SQL, not
 // here) make a general row hold exactly one of the two columns and a secret
@@ -169,7 +169,7 @@ export const sessions = phantomAgentSdk.table('sessions', {
   // turn ends. The list's background rule reads this before started_by.
   lastTurnBy: text('last_turn_by'),
   // WHICH user: who started it (059, the database stamps it) and who drove
-  // the last turn (060). started_by / last_turn_by say what KIND of driver.
+  // the last turn (060). started_by / last_turn_by say what TYPE of driver.
   userId: text('user_id'),
   lastTurnUserId: text('last_turn_user_id'),
   // The model-written title — what the session is building, best-effort,

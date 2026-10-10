@@ -42,9 +42,9 @@ export { STATUS_ICON } from '@phantom-agent-sdk/client';
 import { STATUS_ICON } from '@phantom-agent-sdk/client';
 
 export type Launch =
-  | { kind: 'resume'; sessionId: string }
-  | { kind: 'new'; projectId: string }
-  | { kind: 'add' };
+  | { action: 'resume'; sessionId: string }
+  | { action: 'new'; projectId: string }
+  | { action: 'add' };
 
 export const label = (project: ProjectInfo) => project.displayName || project.name;
 
@@ -185,7 +185,7 @@ export function sessionChoices(
     // last touched is still the fact that matters.
     const whenCol: Cell = dead ? { text: when, mark: 'gray', markChar: '☠', markAfter: true } : when;
     return {
-      value: { kind: 'resume', sessionId: session.id } as Launch, id: session.id,
+      value: { action: 'resume', sessionId: session.id } as Launch, id: session.id,
       cells: [wsCol(session), cardCol, workCol, nameCol, session.model ?? '·', tokensCol, whenCol],
       busy: running,
       dot: open && !running,
@@ -240,12 +240,12 @@ export const projectTitle = (projects: ProjectInfo[], id: string | null): string
  *  here, not from curl. */
 export function projectChoices(projects: ProjectInfo[], canAdd = true): Choice<Launch | null>[] {
   const rows: Choice<Launch | null>[] = projects.map((project) => ({
-    value: { kind: 'new', projectId: project.id } as Launch,
+    value: { action: 'new', projectId: project.id } as Launch,
     label: project.cardPrefix ?? label(project),
     detail: `${project.owner}/${project.name}`,
   }));
   if (canAdd) {
-    rows.push({ value: { kind: 'add' } as Launch, label: 'add a project…',
+    rows.push({ value: { action: 'add' } as Launch, label: 'add a project…',
       detail: projects.length ? '' : 'nothing here yet — start with this' });
   }
   return rows;
@@ -398,13 +398,13 @@ export function Launcher({ mode, projects, sessions, total, busy, loaded, client
         total={mode === 'sessions' ? total : undefined}
         onSelect={(pick) => { if (pick) onPick(pick); }}
         onKey={canEdit ? (char, pick) => {
-          if (char === 'e' && pick?.kind === 'new') onEdit!(pick.projectId);
+          if (char === 'e' && pick?.action === 'new') onEdit!(pick.projectId);
           // The same act as the "add a project…" row, one key from any row.
-          else if (char === 'n' && (canAdd ?? true)) onPick({ kind: 'add' });
+          else if (char === 'n' && (canAdd ?? true)) onPick({ action: 'add' });
         } : mode === 'sessions' ? (char, pick) => {
           if (char === '/' && canFilter) { setFiltering(true); return; }
           if (char === 's') { onToggleBackground?.(); return; }
-          if (pick?.kind !== 'resume') return;
+          if (pick?.action !== 'resume') return;
           if (char === 'd') onDuplicate?.(pick.sessionId);
           else if (char === 'p') onPin?.(pick.sessionId);
           else if (char === 'i') onPing?.(pick.sessionId);

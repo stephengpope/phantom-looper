@@ -142,8 +142,8 @@ export function installScriptUrl(version = APP_VERSION, repo = REPO): string {
 // an image name, a directory or a tag — this refuses anything shell-active
 // rather than trying to quote it.
 const SAFE = /^[A-Za-z0-9._\/:@=,-]+$/;
-function safe(kind: string, value: string): string {
-  if (!SAFE.test(value)) throw new Error(`${kind} contains characters that cannot ride a shell line: ${value}`);
+function safe(what: string, value: string): string {
+  if (!SAFE.test(value)) throw new Error(`${what} contains characters that cannot ride a shell line: ${value}`);
   return value;
 }
 

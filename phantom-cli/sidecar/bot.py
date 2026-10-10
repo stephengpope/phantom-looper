@@ -252,13 +252,13 @@ def list_devices(pa) -> dict[str, list[str]]:  # noqa: ANN001 (pyaudio.PyAudio)
     return {"mics": mics, "speakers": speakers}
 
 
-def device_index(pa, name: str, kind: str) -> int | None:  # noqa: ANN001
+def device_index(pa, name: str, direction: str) -> int | None:  # noqa: ANN001
     """The first device whose name matches `name` (exact, then case-insensitive
-    contains) and has channels of `kind` ("in" | "out"). None = let PortAudio
+    contains) and has channels of `direction` ("in" | "out"). None = let PortAudio
     pick the system default — also what a missing or unplugged name gets."""
     if not name:
         return None
-    key = "maxInputChannels" if kind == "in" else "maxOutputChannels"
+    key = "maxInputChannels" if direction == "in" else "maxOutputChannels"
     candidates = []
     for i in range(pa.get_device_count()):
         d = pa.get_device_info_by_index(i)

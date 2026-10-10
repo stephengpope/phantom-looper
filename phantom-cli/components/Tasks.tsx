@@ -26,7 +26,7 @@ export interface TasksView {
 }
 
 /** What a row stands for. Only live rows can be killed. */
-export type TaskPick = { kind: 'live'; sid: string; command: string } | { kind: 'done'; backgroundTaskId: string };
+export type TaskPick = { status: 'live'; sid: string; command: string } | { status: 'done'; backgroundTaskId: string };
 
 // Fixed widths: this is a status list refreshing in place — columns must not
 // jitter as statuses flip and clocks tick (table.ts's rule, /resume's too).
@@ -48,14 +48,14 @@ export function taskChoices(view: TasksView, now = Date.now()): Choice<TaskPick 
   // must be computed over the same data or a long finished command would
   // skew the live rows out from under it.
   const live = view.tasks.map((task): TableRow<TaskPick | null> => ({
-    value: { kind: 'live', sid: task.sid, command: task.command },
+    value: { status: 'live', sid: task.sid, command: task.command },
     cells: [task.command, 'running', started(task.started_at), '', task.sid],
     busy: true,
     hint: task.log_file ? `output: ${task.log_file}`
       : 'not started by a tracked command — [k] still kills it',
   }));
   const done = view.recent.map((recent): TableRow<TaskPick | null> => ({
-    value: { kind: 'done', backgroundTaskId: recent.background_task_id },
+    value: { status: 'done', backgroundTaskId: recent.background_task_id },
     cells: [recent.command,
       recent.status === 'exited' && recent.exit_code != null ? `exited (${recent.exit_code})` : recent.status,
       started(recent.started_at),
@@ -92,7 +92,7 @@ export function Tasks({ view, notice, onKill, onCancel }: {
         choices={taskChoices(view)}
         onSelect={() => {}}
         onCancel={onCancel}
-        onKey={(char, pick) => { if ((char === 'k' || char === 'c') && pick?.kind === 'live') onKill(pick.sid, pick.command); }}
+        onKey={(char, pick) => { if ((char === 'k' || char === 'c') && pick?.status === 'live') onKill(pick.sid, pick.command); }}
       />
     </Screen>
   );

@@ -113,7 +113,7 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
     if (isMouseInput(char)) {
       const mouse = parseMouse(char);
       if (!mouse) return;
-      if (mouse.kind === 'press' && mouse.button === 0) {
+      if (mouse.type === 'press' && mouse.button === 0) {
         const hitAt = hit(mouse.x, mouse.y);
         if (!hitAt) return;
         const cards = store.cardsIn(hitAt.col);
@@ -122,10 +122,10 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
           setFocus({ col: columnIndex, row: hitAt.row });
           setDrag({ cardId: cards[hitAt.row].id, toCol: hitAt.col, toRow: hitAt.row, moved: false });
         } else setFocus({ col: columnIndex, row: Math.max(0, cards.length - 1) });
-      } else if (mouse.kind === 'drag' && drag) {
+      } else if (mouse.type === 'drag' && drag) {
         const hitAt = hit(mouse.x, mouse.y);
         setDrag(hitAt ? { ...drag, toCol: hitAt.col, toRow: hitAt.row, moved: true } : { ...drag, moved: true });
-      } else if (mouse.kind === 'release' && drag) {
+      } else if (mouse.type === 'release' && drag) {
         if (drag.moved) {
           void store.move(drag.cardId, drag.toCol, drag.toRow);
           setFocus({ col: Math.max(0, columns.indexOf(drag.toCol)), row: drag.toRow });
@@ -134,7 +134,7 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
           if (clicked) openEdit(clicked);
         }
         setDrag(null);
-      } else if (mouse.kind === 'wheel') {
+      } else if (mouse.type === 'wheel') {
         setFocus((focus) => ({ ...focus, row: Math.max(0, Math.min(focusCards.length - 1, focus.row + mouse.button)) }));
       }
       return;

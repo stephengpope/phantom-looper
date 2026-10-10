@@ -5,7 +5,7 @@
 //
 // Line 2 is the devices row, `● mic · ● speaker`; line 3 is the modes row,
 // `● wake · ● headphones`. An off switch is `⊘`, dim — the same glyph for all
-// four because they are the same kind of switch, so "all on" is a glance.
+// four because they are all the same switch, so "all on" is a glance.
 // Clicking a glyph toggles it — the same toggles as /mic /speaker /headphones
 // /wake, handed in as `onDevice`. No command hints in the rows (the slash menu
 // has them): the pane is ~20 columns on a normal terminal and a hint cost more
@@ -95,7 +95,7 @@ export function VoicePanel({ width, voice, expanded, offset = 0, onMeasure, onDe
   /** A click on a switch glyph — the same toggle as its slash command. */
   onDevice?: (which: VoiceSwitch) => void;
   /** A gated tool waiting on the user: the Assistant's ask, so it shows HERE —
-   *  what kind, the subject on its own row (the pane is ~20 columns and the
+   *  what type, the subject on its own row (the pane is ~20 columns and the
    *  subject is the thing being approved: it must not truncate away), then
    *  `accept · decline`. Click either word, or say it. */
   approval?: { label: string; subject: string } | null;
@@ -170,9 +170,9 @@ export function VoicePanel({ width, voice, expanded, offset = 0, onMeasure, onDe
     if ((!onDevice && !onApproval) || !isMouseInput(char)) return;
     const mouse = parseMouse(char);
     if (!mouse || mouse.button !== 0) return;
-    if (mouse.kind === 'press') { pressedRef.current = hit(mouse.x, mouse.y); return; }
-    if (mouse.kind === 'drag') { pressedRef.current = null; return; }
-    if (mouse.kind !== 'release') return;
+    if (mouse.type === 'press') { pressedRef.current = hit(mouse.x, mouse.y); return; }
+    if (mouse.type === 'drag') { pressedRef.current = null; return; }
+    if (mouse.type !== 'release') return;
     const target = pressedRef.current;
     pressedRef.current = null;
     if (!target || hit(mouse.x, mouse.y) !== target) return;

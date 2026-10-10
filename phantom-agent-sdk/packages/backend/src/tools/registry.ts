@@ -1,7 +1,7 @@
 // The tool surface: every tool an agent can call, defined ONCE (one file per
 // area: files, board, crons, skills, web, secrets, database, git, notify, media) and
 // served two ways from the same objects — GET /agents/:agent/tools?session=
-// publishes what an agent of that kind has on that session right now, and
+// publishes what an agent of that type has on that session right now, and
 // POST /tools/:name runs one. A client builds its tools from the listing and
 // never holds a definition of its own; which agent gets which tool, and
 // whether a tool exists at all (a feature switched off is a missing tool),

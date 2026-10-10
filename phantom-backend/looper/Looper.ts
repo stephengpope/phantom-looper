@@ -343,7 +343,7 @@ export class Looper {
     const step = nextStep(card, codingAgent.session.messages, supervisor.session.messages);
     if (!step) { await codingAgent.close(); await supervisor.close(); return 'idle'; }
 
-    if (step.kind === 'supervisor') {
+    if (step.action === 'supervisor') {
       // ── the supervisor's turn: the missing seeds and the coder's reply
       // land as user messages; its reply is its own, recorded whole (tool
       // traffic included — the step rule reads terminal turns off it). ────
@@ -360,7 +360,7 @@ export class Looper {
     await this.setPlanMode(codingAgent.session.id, card.status === 'plan');
     const outcome = skippedIfLocked(await run(codingAgent, step.text, coderKit), 'card');
     if (outcome !== 'turn') return outcome;
-    if (step.kind === 'return' && (card.blocked_reason || card.resolution)) {
+    if (step.action === 'return' && (card.blocked_reason || card.resolution)) {
       await this.patchCard(project, card.number, { blocked_reason: null, resolution: null });
     }
     return 'turn';

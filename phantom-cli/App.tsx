@@ -452,7 +452,7 @@ export function App({
     if (windowStore.overlay?.size === 'full' && mouse && !(showSidebar && mouse.x >= mainCols)) return;
     if (!mouse) return;
     const inVoice = showSidebar && mouse.x >= mainCols;
-    if (mouse.kind === 'wheel') {
+    if (mouse.type === 'wheel') {
       if (mouse.button === 0) return;
       const step = 3 * mouse.button;   // +down scrolls toward the tail (offset shrinks)
       scrollBy(inVoice ? 'voice' : 'chat', -step);
@@ -466,7 +466,7 @@ export function App({
       return;
     }
     if (mouse.button !== 0) return;   // left button only
-    if (mouse.kind === 'press') {
+    if (mouse.type === 'press') {
       stopDragScroll();
       const pane: 'chat' | 'voice' = inVoice ? 'voice' : 'chat';
       const curScroll = selScroll(pane);
@@ -500,7 +500,7 @@ export function App({
     }
     const sel = selection.current;
     if (!sel) return;
-    if (mouse.kind === 'drag') {
+    if (mouse.type === 'drag') {
       sel.head = { x: mouse.x, contentY: mouse.y - selScroll(sel.pane) };
       // Detect edge: set the auto-scroll direction.
       if (mouse.y <= 0) dragScrollDir.current = 1;        // at top → scroll up (into history, offset grows)

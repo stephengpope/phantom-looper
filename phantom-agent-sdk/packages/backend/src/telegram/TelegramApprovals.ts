@@ -1,6 +1,6 @@
 // The Telegram approval gate — the server-side twin of the cli's (App.tsx
 // "the approval gate"). A gated tool (today: project_create_repo) calls
-// `request` and waits; the user sees ONE bubble — what kind, the exact subject
+// `request` and waits; the user sees ONE bubble — the label, the exact subject
 // about to exist, an [Accept] [Decline] inline keyboard — and answers by
 // tapping, or by saying the exact word ("accept" / "decline" as a text or a
 // voice note; exact match like the wake word, never interpretation).
@@ -39,12 +39,12 @@ const PREFIX = 'apv';
 const ACCEPT = 'accept';
 const DECLINE = 'decline';
 
-/** The bubble's text: kind, subject on its own line, the how-to. */
+/** The bubble's text: label, subject on its own line, the how-to. */
 export function askText(ask: Ask): string {
   return `❔ ${ask.label}\n${ask.subject}\n\nAccept or decline below — or just say the word.`;
 }
 
-/** The bubble once answered — the same kind + subject, then the verdict. */
+/** The bubble once answered — the same label + subject, then the verdict. */
 export function answeredText(ask: Ask, ok: boolean): string {
   return `${ok ? '✅' : '✖️'} ${ask.label}\n${ask.subject}\n\n${ok ? 'Accepted.' : 'Declined.'}`;
 }

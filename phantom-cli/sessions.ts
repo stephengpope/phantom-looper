@@ -230,7 +230,7 @@ export class SessionStore {
         const line: ModelLine = { provider: model.provider, model: model.model, reasoning: model.reasoning ?? '' };
         if (line.provider !== entry.summary.provider || line.model !== entry.summary.model) {
           entry.summary = line;
-          entry.done = [...entry.done, { kind: 'note', id: nextId('note'), text: `model → ${line.provider}/${line.model}` }];
+          entry.done = [...entry.done, { type: 'note', id: nextId('note'), text: `model → ${line.provider}/${line.model}` }];
         }
         this.notify();
       }),
@@ -307,7 +307,7 @@ export class SessionStore {
           this.note(id, 'not sent — session in use elsewhere');
           return;
         }
-        entry.turn = [...entry.turn, { kind: 'error', id: nextId('err'), message: err.message }];
+        entry.turn = [...entry.turn, { type: 'error', id: nextId('err'), message: err.message }];
         if (entry.id === this.activeId) this.notify();
         // A turn that failed sends no turn-end; it settles when the agent
         // lets go, behind say's promise, like every other ending.
@@ -328,7 +328,7 @@ export class SessionStore {
     for (const text of [...texts].reverse()) {
       for (let i = done.length - 1; i >= 0; i--) {
         const part = done[i]!;
-        if (part.kind === 'user' && part.text === text) { done.splice(i, 1); break; }
+        if (part.type === 'user' && part.text === text) { done.splice(i, 1); break; }
       }
     }
     entry.done = done;
@@ -338,13 +338,13 @@ export class SessionStore {
    *  user lines — nothing else lands in `done` between enter and turn-start. */
   private sentWordsStart(entry: LoadedSession): number {
     let at = entry.done.length;
-    while (at > 0 && entry.done[at - 1]!.kind === 'user') at--;
+    while (at > 0 && entry.done[at - 1]!.type === 'user') at--;
     return at;
   }
 
   /** The user's words, drawn where they were sent. */
   private userParts(entry: LoadedSession, texts: string[]): void {
-    for (const text of texts) if (text.trim()) entry.done = [...entry.done, { kind: 'user', id: nextId('user'), text }];
+    for (const text of texts) if (text.trim()) entry.done = [...entry.done, { type: 'user', id: nextId('user'), text }];
   }
 
   /** The agent let go of the turn (say's promise settled — answered, failed
@@ -363,7 +363,7 @@ export class SessionStore {
       entry.turn = [];
       if (entry.startedAt) {
         const endedAt = Date.now();
-        rest.push({ kind: 'worked', id: nextId('worked'), ms: endedAt - entry.startedAt, at: endedAt });
+        rest.push({ type: 'worked', id: nextId('worked'), ms: endedAt - entry.startedAt, at: endedAt });
       }
       entry.done = [...entry.done, ...rest];
       entry.live = [];
@@ -489,7 +489,7 @@ export class SessionStore {
    *  notes) stays. */
   private repaint(entry: LoadedSession, messages: readonly ModelMessage[]): void {
     const banner = entry.done.slice(0, 2);
-    entry.done = [...banner, { kind: 'note', id: nextId('note'), text: 'refreshed — this session moved forward elsewhere' },
+    entry.done = [...banner, { type: 'note', id: nextId('note'), text: 'refreshed — this session moved forward elsewhere' },
       ...messagesToParts([...messages])];
     entry.live = [];
     entry.turn = [];
@@ -508,7 +508,7 @@ export class SessionStore {
     entry.remoteBusy = true;
     entry.startedAt = Date.now();
     entry.tokens = NO_TOKENS;
-    if (text.trim()) entry.done = [...entry.done, { kind: 'user', id: nextId('user'), text }];
+    if (text.trim()) entry.done = [...entry.done, { type: 'user', id: nextId('user'), text }];
     this.notify();
   }
 
@@ -544,7 +544,7 @@ export class SessionStore {
   note(id: string, text: string): void {
     const entry = this.get(id);
     if (!entry) return;
-    entry.done = [...entry.done, { kind: 'note', id: nextId('note'), text }];
+    entry.done = [...entry.done, { type: 'note', id: nextId('note'), text }];
     this.notify();
   }
 
@@ -648,7 +648,7 @@ export class SessionStore {
       // api relays the result down the feed. It lands on its row there.
       if (part.type === 'tool-result') {
         const id = (part as { toolCallId: string }).toolCallId;
-        const at = entry.done.findIndex((done) => done.kind === 'tool' && done.id === id);
+        const at = entry.done.findIndex((done) => done.type === 'tool' && done.id === id);
         if (at >= 0) { entry.done = entry.done.map((done, i) => (i === at ? applyPart([done], part)[0]! : done)); continue; }
       }
       turn = applyPart(turn, part);

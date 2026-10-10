@@ -12,7 +12,7 @@ import type { ProjectRow } from './storage/schema.js';
  *  migration and "unset" stays distinct from "set to the current default".
  *
  *  Null is never STORED: null in a write clears the key. A setting whose
- *  default is null is therefore the only kind that may be cleared to
+ *  default is null is therefore the only setting that may be cleared to
  *  "nothing" ("no timeout", "no endpoint"); a nullable setting with a
  *  non-null default would make "off" unsayable, so the registry refuses it. */
 export interface SettingDefinition {

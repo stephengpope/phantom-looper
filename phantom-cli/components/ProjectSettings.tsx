@@ -1,7 +1,7 @@
 // One project: what it is, and the settings it does differently from
 // everyone else. Reached with `e` from the project list.
 //
-// Three kinds of row, because mixing them is how you end up changing a
+// Three row types, because mixing them is how you end up changing a
 // server-wide value believing it was local:
 //
 //   the project    its own facts — name, base branch, branch prefix. No
@@ -13,7 +13,7 @@
 //                    global-only and lives on /settings
 //   danger           delete
 //
-// The rule that sorts a row into the first kind or the second: clear it, and
+// The rule that sorts a row into the first type or the second: clear it, and
 // what does it fall back to? A global value or a code default => a setting.
 // Nothing => a fact about this project.
 //
@@ -63,7 +63,7 @@ interface Row {
 
 type View =
   | { at: 'list' }
-  | { at: 'edit'; key: string; spec: EditSpec; kind: 'field' | 'setting' }
+  | { at: 'edit'; key: string; spec: EditSpec; type: 'field' | 'setting' }
   | { at: 'confirm' };
 
 // The right-hand column answers one question: is this project different from
@@ -159,7 +159,7 @@ export function ProjectSettings({ api, project, onClose, onChanged }: {
         spec={view.spec}
         onCancel={() => setView({ at: 'list' })}
         onSubmit={(value) => {
-          if (view.kind === 'setting') {
+          if (view.type === 'setting') {
             // An empty secret = changed my mind, not "store an empty token".
             if (view.spec.secret && value === null) { setView({ at: 'list' }); return; }
             const patch: Record<string, ConfigValue> = { [view.key]: value as ConfigValue };
@@ -241,7 +241,7 @@ export function ProjectSettings({ api, project, onClose, onChanged }: {
           if (key === 'display_name' || key === 'base_branch' || key === 'branch_prefix') {
             const current = key === 'display_name' ? row.displayName ?? row.name
               : key === 'base_branch' ? row.baseBranch : row.branchPrefix;
-            setView({ at: 'edit', kind: 'field', key, spec: {
+            setView({ at: 'edit', type: 'field', key, spec: {
               title: key === 'display_name' ? 'name' : key.replace(/_/g, ' '), type: 'string', current,
               note: key === 'display_name' ? 'empty goes back to the GitHub name' : undefined,
             } });
@@ -265,7 +265,7 @@ export function ProjectSettings({ api, project, onClose, onChanged }: {
           const provider = providerForModelRow(key, values);
           void (async () => {
             const models = provider ? await loadModels(provider) : [];
-            setView({ at: 'edit', kind: 'setting', key, spec: buildModelSpec(key, spec, values, models, eff) });
+            setView({ at: 'edit', type: 'setting', key, spec: buildModelSpec(key, spec, values, models, eff) });
           })();
         }}
         onKey={(char, key) => {

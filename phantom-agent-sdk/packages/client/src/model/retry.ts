@@ -1,5 +1,5 @@
 // THE retry loop — a fetch wrapper, so it works identically for every
-// provider and every kind of call. The AI SDK's own loop is a fixed 2s
+// provider and every call. The AI SDK's own loop is a fixed 2s
 // doubling with no way to shape it, so every AI SDK call sets maxRetries: 0
 // and this is the one loop. Retryable failures (429/408/409/5xx and network
 // errors) wait out RETRY_WAITS_S and try again, reporting each attempt as a

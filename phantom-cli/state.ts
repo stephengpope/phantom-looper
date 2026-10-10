@@ -20,13 +20,13 @@
 import type { ModelMessage, TextStreamPart, ToolResultPart, ToolSet } from 'ai';
 
 export type Part =
-  | { kind: 'note'; id: string; text: string }
-  | { kind: 'worked'; id: string; ms: number; at: number }
-  | { kind: 'user'; id: string; text: string }
-  | { kind: 'text'; id: string; sid?: string; text: string; done: boolean; first?: boolean }
-  | { kind: 'reasoning'; id: string; sid?: string; text: string; done: boolean; startedAt: number; endedAt?: number }
+  | { type: 'note'; id: string; text: string }
+  | { type: 'worked'; id: string; ms: number; at: number }
+  | { type: 'user'; id: string; text: string }
+  | { type: 'text'; id: string; sid?: string; text: string; done: boolean; first?: boolean }
+  | { type: 'reasoning'; id: string; sid?: string; text: string; done: boolean; startedAt: number; endedAt?: number }
   | {
-      kind: 'tool'; id: string; name: string;
+      type: 'tool'; id: string; name: string;
       inputText: string; input?: unknown;
       status: 'pending' | 'running' | 'ok' | 'error';
       output?: unknown; error?: string;
@@ -35,7 +35,7 @@ export type Part =
        *  handed the turn off; its result comes down the feed from the api. */
       handedOff?: boolean;
     }
-  | { kind: 'error'; id: string; message: string };
+  | { type: 'error'; id: string; message: string };
 
 export type StreamPart = TextStreamPart<ToolSet>;
 
@@ -43,7 +43,7 @@ let seq = 0;
 export const nextId = (prefix: string) => `${prefix}-${++seq}`;
 
 function isDone(part: Part): boolean {
-  switch (part.kind) {
+  switch (part.type) {
     case 'text': case 'reasoning': return part.done;
     case 'tool': return part.status === 'ok' || part.status === 'error';
     default: return true;
@@ -60,66 +60,66 @@ export function applyPart(turn: Part[], part: StreamPart, now = Date.now()): Par
   // deltas concatenate onto the finished block above the tool rows. Tool parts
   // keep the toolCallId as `id`: it is globally unique and the result must
   // find its call.
-  const bySid = (kind: Part['kind'], sid: string) =>
-    turn.findIndex((part) => part.kind === kind && (part as { sid?: string }).sid === sid && !isDone(part));
-  const byId = (kind: Part['kind'], id: string) =>
-    turn.findIndex((part) => part.kind === kind && part.id === id && !isDone(part));
+  const bySid = (type: Part['type'], sid: string) =>
+    turn.findIndex((part) => part.type === type && (part as { sid?: string }).sid === sid && !isDone(part));
+  const byId = (type: Part['type'], id: string) =>
+    turn.findIndex((part) => part.type === type && part.id === id && !isDone(part));
   const replace = (i: number, part: Part) => [...turn.slice(0, i), part, ...turn.slice(i + 1)];
 
   switch (part.type) {
     case 'text-start':
-      return [...turn, { kind: 'text', id: nextId('text'), sid: part.id, text: '', done: false, first: true }];
+      return [...turn, { type: 'text', id: nextId('text'), sid: part.id, text: '', done: false, first: true }];
     case 'text-delta': {
       const i = bySid('text', part.id);
-      if (i < 0) return [...turn, { kind: 'text', id: nextId('text'), sid: part.id, text: part.text, done: false, first: true }];
-      const existing = turn[i] as Extract<Part, { kind: 'text' }>;
+      if (i < 0) return [...turn, { type: 'text', id: nextId('text'), sid: part.id, text: part.text, done: false, first: true }];
+      const existing = turn[i] as Extract<Part, { type: 'text' }>;
       return replace(i, { ...existing, text: existing.text + part.text });
     }
     case 'text-end': {
       const i = bySid('text', part.id);
       if (i < 0) return turn;
-      const existing = turn[i] as Extract<Part, { kind: 'text' }>;
+      const existing = turn[i] as Extract<Part, { type: 'text' }>;
       // Drop empty text blocks (models emit them around tool calls).
       return existing.text.trim() ? replace(i, { ...existing, done: true }) : turn.filter((_, j) => j !== i);
     }
 
     case 'reasoning-start':
-      return [...turn, { kind: 'reasoning', id: nextId('reasoning'), sid: part.id, text: '', done: false, startedAt: now }];
+      return [...turn, { type: 'reasoning', id: nextId('reasoning'), sid: part.id, text: '', done: false, startedAt: now }];
     case 'reasoning-delta': {
       const i = bySid('reasoning', part.id);
-      if (i < 0) return [...turn, { kind: 'reasoning', id: nextId('reasoning'), sid: part.id, text: part.text, done: false, startedAt: now }];
-      const existing = turn[i] as Extract<Part, { kind: 'reasoning' }>;
+      if (i < 0) return [...turn, { type: 'reasoning', id: nextId('reasoning'), sid: part.id, text: part.text, done: false, startedAt: now }];
+      const existing = turn[i] as Extract<Part, { type: 'reasoning' }>;
       return replace(i, { ...existing, text: existing.text + part.text });
     }
     case 'reasoning-end': {
       const i = bySid('reasoning', part.id);
       if (i < 0) return turn;
-      const existing = turn[i] as Extract<Part, { kind: 'reasoning' }>;
+      const existing = turn[i] as Extract<Part, { type: 'reasoning' }>;
       return replace(i, { ...existing, done: true, endedAt: now });
     }
 
     case 'tool-input-start':
       return [...turn, {
-        kind: 'tool', id: part.id, name: part.toolName, inputText: '', status: 'pending', startedAt: now,
+        type: 'tool', id: part.id, name: part.toolName, inputText: '', status: 'pending', startedAt: now,
       }];
     case 'tool-input-delta': {
       const i = byId('tool', part.id);
       if (i < 0) return turn;
-      const existing = turn[i] as Extract<Part, { kind: 'tool' }>;
+      const existing = turn[i] as Extract<Part, { type: 'tool' }>;
       return replace(i, { ...existing, inputText: existing.inputText + part.delta });
     }
     case 'tool-call': {
       const i = byId('tool', part.toolCallId);
-      const base: Extract<Part, { kind: 'tool' }> = i < 0
-        ? { kind: 'tool', id: part.toolCallId, name: part.toolName, inputText: '', status: 'pending', startedAt: now }
-        : (turn[i] as Extract<Part, { kind: 'tool' }>);
+      const base: Extract<Part, { type: 'tool' }> = i < 0
+        ? { type: 'tool', id: part.toolCallId, name: part.toolName, inputText: '', status: 'pending', startedAt: now }
+        : (turn[i] as Extract<Part, { type: 'tool' }>);
       const next = { ...base, input: part.input, status: 'running' as const };
       return i < 0 ? [...turn, next] : replace(i, next);
     }
     case 'tool-result': {
       const i = byId('tool', part.toolCallId);
       if (i < 0) return turn;
-      const existing = turn[i] as Extract<Part, { kind: 'tool' }>;
+      const existing = turn[i] as Extract<Part, { type: 'tool' }>;
       // The envelope is the tool output; ok:false is a tool-level
       // failure the model will see and self-correct — show it as such.
       const env = part.output as { ok?: boolean; error?: { code?: string; message?: string } } | undefined;
@@ -133,14 +133,14 @@ export function applyPart(turn: Part[], part: StreamPart, now = Date.now()): Par
     case 'tool-error': {
       const i = byId('tool', part.toolCallId);
       if (i < 0) return turn;
-      const existing = turn[i] as Extract<Part, { kind: 'tool' }>;
+      const existing = turn[i] as Extract<Part, { type: 'tool' }>;
       return replace(i, { ...existing, status: 'error', endedAt: now, error: String((part.error as Error)?.message ?? part.error) });
     }
 
     case 'error':
-      return [...turn, { kind: 'error', id: nextId('err'), message: String((part.error as Error)?.message ?? part.error) }];
+      return [...turn, { type: 'error', id: nextId('err'), message: String((part.error as Error)?.message ?? part.error) }];
     case 'abort':
-      return [...turn, { kind: 'note', id: nextId('abort'), text: 'interrupted' }];
+      return [...turn, { type: 'note', id: nextId('abort'), text: 'interrupted' }];
     default:
       return turn;
   }
@@ -212,13 +212,13 @@ export function takeCompleted(turn: Part[]): { done: Part[]; live: Part[] } {
   const live = turn.slice(i);
 
   const head = live[0];
-  if (head?.kind === 'text' && !head.done) {
+  if (head?.type === 'text' && !head.done) {
     const { closed, open } = splitBlocks(head.text);
     if (closed.length) {
       // The message's dot rides the FIRST committed block; the rest of the
       // reply, this streaming remainder included, renders with a blank gutter.
       closed.forEach((text, j) =>
-        done.push({ kind: 'text', id: nextId('text'), text, done: true, first: j === 0 && head.first }));
+        done.push({ type: 'text', id: nextId('text'), text, done: true, first: j === 0 && head.first }));
       // The committed text is dropped from the live part so it is never drawn twice.
       live[0] = { ...head, text: open, first: false };
     }
@@ -229,17 +229,17 @@ export function takeCompleted(turn: Part[]): { done: Part[]; live: Part[] } {
 /** Everything in the turn, marked done — used when a turn ends or aborts. */
 export function finalize(turn: Part[], now = Date.now(), opts: { handedOffTo?: string | null } = {}): Part[] {
   return turn.map((part) => {
-    if (part.kind === 'text') return { ...part, done: true };
-    if (part.kind === 'reasoning') return part.done ? part : { ...part, done: true, endedAt: now };
+    if (part.type === 'text') return { ...part, done: true };
+    if (part.type === 'reasoning') return part.done ? part : { ...part, done: true, endedAt: now };
     // A tool still open when the turn left this window: interrupted — unless
     // the turn was HANDED OFF, when the api finishes the call and writes its
     // result; it stays open, saying where, until the record redraws it.
-    if (part.kind === 'tool' && (part.status === 'pending' || part.status === 'running')) {
+    if (part.type === 'tool' && (part.status === 'pending' || part.status === 'running')) {
       return opts.handedOffTo ? { ...part, handedOff: true }
         : { ...part, status: 'error' as const, error: 'interrupted', endedAt: now };
     }
     return part;
-  }).filter((part) => !(part.kind === 'text' && !part.text.trim()));
+  }).filter((part) => !(part.type === 'text' && !part.text.trim()));
 }
 
 /** The phase word for the status line — `thinking`, `writing`, the tool's
@@ -247,9 +247,9 @@ export function finalize(turn: Part[], now = Date.now(), opts: { handedOffTo?: s
 export function phaseLabel(live: Part[]): string {
   for (let i = live.length - 1; i >= 0; i--) {
     const existing = live[i];
-    if (existing.kind === 'tool' && (existing.status === 'pending' || existing.status === 'running')) return existing.name;
-    if (existing.kind === 'reasoning' && !existing.done) return 'thinking';
-    if (existing.kind === 'text' && !existing.done) return 'writing';
+    if (existing.type === 'tool' && (existing.status === 'pending' || existing.status === 'running')) return existing.name;
+    if (existing.type === 'reasoning' && !existing.done) return 'thinking';
+    if (existing.type === 'text' && !existing.done) return 'writing';
   }
   return '';
 }
@@ -391,7 +391,7 @@ export function messagesToParts(messages: ModelMessage[]): Part[] {
   for (const message of messages) {
     if (message.role === 'user') {
       const text = textOf(message.content).trim();
-      if (text) parts.push({ kind: 'user', id: nextId('user'), text });
+      if (text) parts.push({ type: 'user', id: nextId('user'), text });
       continue;
     }
     if (message.role === 'assistant') {
@@ -399,11 +399,11 @@ export function messagesToParts(messages: ModelMessage[]): Part[] {
         ? [{ type: 'text', text: message.content }] : message.content;
       for (const part of content as { type: string; [key: string]: unknown }[]) {
         if (part.type === 'text' && String(part.text).trim()) {
-          parts.push({ kind: 'text', id: nextId('text'), text: String(part.text), done: true, first: true });
+          parts.push({ type: 'text', id: nextId('text'), text: String(part.text), done: true, first: true });
         } else if (part.type === 'tool-call') {
           toolAt.set(String(part.toolCallId), parts.length);
           parts.push({
-            kind: 'tool', id: nextId('tool'), name: String(part.toolName),
+            type: 'tool', id: nextId('tool'), name: String(part.toolName),
             inputText: '', input: part.input, status: 'running', startedAt: 0,
           });
         }
@@ -415,7 +415,7 @@ export function messagesToParts(messages: ModelMessage[]): Part[] {
         if (part.type !== 'tool-result') continue;   // approval responses render nothing
         const i = toolAt.get(part.toolCallId);
         if (i === undefined) continue;
-        const existing = parts[i] as Extract<Part, { kind: 'tool' }>;
+        const existing = parts[i] as Extract<Part, { type: 'tool' }>;
         parts[i] = { ...existing, ...resultOf(part.output), endedAt: 0 };
       }
     }
@@ -423,7 +423,7 @@ export function messagesToParts(messages: ModelMessage[]): Part[] {
 
   // A tool call whose result never landed (the process died inside the step).
   return parts.map((part) =>
-    part.kind === 'tool' && part.status === 'running'
+    part.type === 'tool' && part.status === 'running'
       ? { ...part, status: 'error' as const, error: 'interrupted' }
       : part);
 }
@@ -431,7 +431,7 @@ export function messagesToParts(messages: ModelMessage[]): Part[] {
 /** Unwrap a stored tool output into the fields a tool Part renders. The
  *  envelope travels as JSON, so ok:false is a tool-level failure —
  *  the same reading applyPart gives the live `tool-result` part. */
-function resultOf(output: ToolResultPart['output']): Partial<Extract<Part, { kind: 'tool' }>> {
+function resultOf(output: ToolResultPart['output']): Partial<Extract<Part, { type: 'tool' }>> {
   if (output.type === 'error-text' || output.type === 'error-json') {
     const value = output.value as { message?: string } | string;
     return { status: 'error', error: typeof value === 'string' ? value : value?.message ?? 'error' };

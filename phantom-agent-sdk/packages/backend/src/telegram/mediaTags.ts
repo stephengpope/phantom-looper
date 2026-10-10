@@ -157,7 +157,8 @@ export async function validateDeliveryPath(hostPath: string, allowedRoots: strin
   return null;
 }
 
-export type SendKind = 'photo' | 'video' | 'voice' | 'audio' | 'document';
+/** Which Telegram method a file goes out through. */
+export type SendType = 'photo' | 'video' | 'voice' | 'audio' | 'document';
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
 const VIDEO_EXTS = new Set(['.mp4', '.mov', '.avi', '.mkv', '.webm', '.3gp']);
@@ -166,7 +167,7 @@ const AUDIO_EXTS = new Set(['.mp3', '.m4a']);     // sendAudio takes MP3/M4A
 
 /** How a file should be sent. `isVoice` only turns an .ogg into a voice bubble
  *  when the tag asked; `forceDocument` sends images as files uncompressed. */
-export function deliveryKind(filePath: string, opts: { isVoice?: boolean; forceDocument?: boolean } = {}): SendKind {
+export function deliveryType(filePath: string, opts: { isVoice?: boolean; forceDocument?: boolean } = {}): SendType {
   const ext = path.extname(filePath).toLowerCase();
   if (VOICE_EXTS.has(ext)) return opts.isVoice ? 'voice' : 'document';
   if (AUDIO_EXTS.has(ext)) return 'audio';
@@ -175,7 +176,7 @@ export function deliveryKind(filePath: string, opts: { isVoice?: boolean; forceD
   return 'document';
 }
 
-export interface Deliverable { path: string; kind: SendKind }
+export interface Deliverable { path: string; type: SendType }
 
 /**
  * The whole job for a telegram reply: find the files the agent named, locate
@@ -198,7 +199,7 @@ export async function collectDeliverables(
     const host = await locate(unquote(want.path));
     if (!host || seen.has(host)) continue;
     seen.add(host);
-    files.push({ path: host, kind: deliveryKind(host, { isVoice: want.isVoice, forceDocument: tagged.forceDocument }) });
+    files.push({ path: host, type: deliveryType(host, { isVoice: want.isVoice, forceDocument: tagged.forceDocument }) });
   }
   return { cleaned: bare.cleaned, files };
 }

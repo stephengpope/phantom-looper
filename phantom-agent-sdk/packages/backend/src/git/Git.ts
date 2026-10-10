@@ -133,7 +133,7 @@ export function classifyGitFailure(error: unknown, opts: { hadToken?: boolean } 
 
 /** A brand-new checkout at `dir`, on `branch`, ready to be worked in.
  *
- *  ONE kind of clone, for a new session, a restarted one and a spare alike:
+ *  ONE clone recipe, for a new session, a restarted one and a spare alike:
  *  the whole commit history, none of the past file contents
  *  (--filter=blob:none). Every ancestry question the system asks
  *  (merge-base, is-ancestor, behind/ahead) is answered from commits alone,

@@ -46,8 +46,8 @@ export interface WsFacts { label: string; cardPrefix?: string; error?: string }
 
 /** What opening resolves to. phantom-looper's openSession turns each into the same
  *  create / restart / attach path. */
-export type OpenTarget = { kind: 'new'; projectId: string } | { kind: 'open'; id: string }
-  | { kind: 'duplicate'; id: string };
+export type OpenTarget = { action: 'new'; projectId: string } | { action: 'open'; id: string }
+  | { action: 'duplicate'; id: string };
 
 /** An ask standing in the Assistant's pane, and the promise its tool is
  *  parked on. */
@@ -157,7 +157,7 @@ function bannerParts(banner: { project: string; branch: string },
   return [
     `${banner.project} · ${banner.branch}`,
     `${summary.provider}/${summary.model} · reasoning ${summary.reasoning}`,
-  ].map((text) => ({ kind: 'note', id: nextId('note'), text }) as Part);
+  ].map((text) => ({ type: 'note', id: nextId('note'), text }) as Part);
 }
 
 export class WindowStore {
@@ -194,7 +194,7 @@ export class WindowStore {
 
   /** A timed message on the status bar — white text on a colored background,
    *  auto-cleared after 1.75s. Used for things that need to be seen without
-   *  polluting the pane. The background says the kind: red = something was
+   *  polluting the pane. The background says which: red = something was
    *  removed ("Session closed"), cyan = just information ("only session"). */
   toast: { text: string; bg: string } | null = null;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -655,7 +655,7 @@ export class WindowStore {
     // drew — richer than a replay, and no repaint to jump through.
     this.sessions.reseat(id, keepScreen ? null : [
       ...cur.done.slice(0, 2),
-      { kind: 'note', id: nextId('note'), text: 'refreshed — this session moved forward elsewhere' } as Part,
+      { type: 'note', id: nextId('note'), text: 'refreshed — this session moved forward elsewhere' } as Part,
       ...messagesToParts(conversationFrom(lines)),
     ], transcript.updated_at ?? server, usageTotals(lines), lastUsage(lines));
   };
@@ -669,7 +669,7 @@ export class WindowStore {
     this.splash = false;
     if (this.sessions.active()) this.sessions.note(this.sessions.activeId, text);
     else {
-      this.notes = [...this.notes, { kind: 'note', id: nextId('note'), text } as Part];
+      this.notes = [...this.notes, { type: 'note', id: nextId('note'), text } as Part];
       this.notify();
     }
   };
@@ -822,7 +822,7 @@ export class WindowStore {
    *  server transcript and the frozen prompt. Opening never locks. */
   openSession = async (target: OpenTarget): Promise<boolean> => {
     try {
-      if (target.kind === 'open') {
+      if (target.action === 'open') {
         if (target.id === this.sessions.activeId) { this.note('already here'); return true; }
         if (this.sessions.has(target.id)) { this.switchTo(target.id); return true; }
         // Clear the splash now so it never flashes during the calls that
@@ -830,7 +830,7 @@ export class WindowStore {
         this.splash = false;
         this.notify();
       }
-      if (target.kind === 'new') {
+      if (target.action === 'new') {
         // The conversation will be empty: clear the pane and put the splash
         // up NOW, so the ghost has the whole pane while the calls run.
         this.opening = true;
@@ -850,9 +850,9 @@ export class WindowStore {
         onNotice: (notice) => forEntry()?.onNotice(notice),
       };
       const backend = this.opts.backend();
-      const agent: CodingAgent = target.kind === 'new'
+      const agent: CodingAgent = target.action === 'new'
         ? await CodingAgent.newSession(backend, handlers, target.projectId)
-        : await CodingAgent.resumeSession(backend, handlers, target.kind === 'duplicate'
+        : await CodingAgent.resumeSession(backend, handlers, target.action === 'duplicate'
           ? ((await this.api('POST', `/sessions/${target.id}/duplicate`) as { id: string }).id)
           : target.id);
       made = agent;
@@ -873,10 +873,10 @@ export class WindowStore {
       // session the user was typing in: that text is parked on the one left.
       const onScreen = this.draftOnScreen();
       const prev = this.sessions.active();
-      if (prev && target.kind !== 'new') prev.draft = onScreen;
+      if (prev && target.action !== 'new') prev.draft = onScreen;
       const resumed = [...agent.session.messages];
       this.sessions.add({
-        ...(target.kind === 'new' ? { draft: onScreen } : {}),
+        ...(target.action === 'new' ? { draft: onScreen } : {}),
         id: row.id, branch: row.branch, projectId: row.projectId,
         name: row.name ?? null,
         agent, summary,
@@ -889,7 +889,7 @@ export class WindowStore {
         ...(card ? { card } : {}),
         done: [
           ...bannerParts({ project: project.label, branch: row.branch }, summary),
-          ...(project.error ? [{ kind: 'note', id: nextId('note'), text: project.error } as Part] : []),
+          ...(project.error ? [{ type: 'note', id: nextId('note'), text: project.error } as Part] : []),
           ...messagesToParts(resumed),
         ],
       });
@@ -902,9 +902,9 @@ export class WindowStore {
       this.opts.onSession?.({ id: row.id, branch: row.branch, projectId: row.projectId });
       return true;
     } catch (entry) {
-      const what = target.kind === 'new'
+      const what = target.action === 'new'
         ? `could not start a session in ${this.wsLabel(target.projectId)}`
-        : target.kind === 'duplicate' ? `could not duplicate session ${target.id}`
+        : target.action === 'duplicate' ? `could not duplicate session ${target.id}`
           : `could not open session ${target.id}`;
       this.opening = false;
       this.note(`${what}: ${(entry as Error).message}`);
@@ -931,7 +931,7 @@ export class WindowStore {
     }
     this.pickerNotice = undefined;   // the gate passed — no refusal to show
     this.dismissOverlay();
-    await this.openSession({ kind: 'duplicate', id });
+    await this.openSession({ action: 'duplicate', id });
   };
 
   /** What the window CALLS a session when it must name one: the server name
@@ -961,7 +961,7 @@ export class WindowStore {
     if (wasOnScreen) {
       const next = this.sessions.list()[0];
       if (next) this.switchTo(next.id);
-      else opened_new = await this.openSession({ kind: 'new', projectId });
+      else opened_new = await this.openSession({ action: 'new', projectId });
       // Both of those restart the count's clock; a failed open leaves no
       // session on screen, and this is what clears the toolbar's count.
       if (!this.sessions.activeId) this.watchTasks();
@@ -1390,7 +1390,7 @@ export class WindowStore {
     try {
       const project = await this.api('POST', '/projects', req) as { id: string; owner: string; name: string };
       this.dismissOverlay();
-      await this.openSession({ kind: 'new', projectId: project.id });
+      await this.openSession({ action: 'new', projectId: project.id });
       this.note(`project ${project.owner}/${project.name} added`);
     } catch (entry) {
       // The form is still up and reads this on its next draw — it is NOT
@@ -1817,8 +1817,8 @@ export class WindowStore {
         if (args) {
           const project = this.findProject(args);
           if ('error' in project) { this.note(project.error); return; }
-          await this.openSession({ kind: 'new', projectId: project.id });
-        } else if (session) await this.openSession({ kind: 'new', projectId: session.projectId });
+          await this.openSession({ action: 'new', projectId: project.id });
+        } else if (session) await this.openSession({ action: 'new', projectId: session.projectId });
         else await this.openPicker('project');
         return;
       }
@@ -1837,7 +1837,7 @@ export class WindowStore {
           this.note('a turn is running — wait for it to finish, then /duplicate');
           return;
         }
-        await this.openSession({ kind: 'duplicate', id: session.id });
+        await this.openSession({ action: 'duplicate', id: session.id });
         return;
       case 'trash':
         if (!session) { this.note('no session is open — nothing to trash'); return; }
@@ -2099,7 +2099,7 @@ export class WindowStore {
     if (!this.opts.boot || this.booted) return;
     this.booted = true;
     const want = this.opts.boot;
-    if (want.resumeId) { await this.openSession({ kind: 'open', id: want.resumeId }); return; }
+    if (want.resumeId) { await this.openSession({ action: 'open', id: want.resumeId }); return; }
     // One parallel ask, then one draw. The pane stays blank until both land:
     // whether a session opens (ghost) or the picker comes up depends on the
     // project count AND the setting, and drawing before knowing either is
@@ -2130,7 +2130,7 @@ export class WindowStore {
     // Nothing registered yet: go straight to adding one. An empty install has
     // to be able to start from here, not from curl.
     if (!projects.length) { this.startAddProject(); return; }
-    if (projects.length === 1) { await this.openSession({ kind: 'new', projectId: projects[0].id }); return; }
+    if (projects.length === 1) { await this.openSession({ action: 'new', projectId: projects[0].id }); return; }
     // boot_last_project (a server setting, on by default) skips the picker:
     // a new session in the project of the newest session you drove yourself.
     // The ghost goes up NOW — the decision is made — and the session-list
@@ -2141,7 +2141,7 @@ export class WindowStore {
       try {
         const rows = ((await this.api('GET', '/sessions')) as unknown as { sessions: SessionInfo[] }).sessions;
         const last = lastProjectId(projects, rows);
-        if (last) { await this.openSession({ kind: 'new', projectId: last }); return; }
+        if (last) { await this.openSession({ action: 'new', projectId: last }); return; }
       } catch (entry) { this.note(`could not reopen your last project: ${(entry as Error).message}`); }
     }
     await this.openPicker('project');

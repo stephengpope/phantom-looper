@@ -22,7 +22,7 @@ export const MOUSE_OFF = '\x1b[?1006l\x1b[?1002l';
 const SGR = /^\x1b?\[<(\d+);(\d+);(\d+)([mM])$/;
 
 export interface MouseEvent {
-  kind: 'wheel' | 'press' | 'drag' | 'release';
+  type: 'wheel' | 'press' | 'drag' | 'release';
   /** 0 left, 1 middle, 2 right; for wheel: -1 up, +1 down. */
   button: number;
   /** 0-based terminal column/row. */
@@ -47,10 +47,10 @@ export function parseMouse(input: string): MouseEvent | null {
   if (code >= 64 && code < 96) {
     // 64 up, 65 down (66/67 are horizontal — reported as a wheel with dir 0, ignored by callers)
     const dir = low === 0 ? -1 : low === 1 ? 1 : 0;
-    return { kind: 'wheel', button: dir, x: column, y: row, shift, meta, ctrl };
+    return { type: 'wheel', button: dir, x: column, y: row, shift, meta, ctrl };
   }
-  if (code & 32) return { kind: 'drag', button: low, x: column, y: row, shift, meta, ctrl };
-  return { kind: release ? 'release' : 'press', button: low, x: column, y: row, shift, meta, ctrl };
+  if (code & 32) return { type: 'drag', button: low, x: column, y: row, shift, meta, ctrl };
+  return { type: release ? 'release' : 'press', button: low, x: column, y: row, shift, meta, ctrl };
 }
 
 // --- selection ------------------------------------------------------------------

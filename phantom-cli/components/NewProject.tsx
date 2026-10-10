@@ -39,7 +39,7 @@ export interface GitHubRepo {
 }
 
 type Step =
-  | { at: 'kind' }
+  | { at: 'source' }
   | { at: 'pick' }
   | { at: 'url'; create: boolean }
   | { at: 'visibility'; url: string }
@@ -56,7 +56,7 @@ export function NewProject({ api, onSubmit, onCancel, error, now }: {
   error?: string;
   now?: number;
 }) {
-  const [step, setStep] = useState<Step>({ at: 'kind' });
+  const [step, setStep] = useState<Step>({ at: 'source' });
   const [url, setUrl] = useState('');
   const [query, setQuery] = useState('');
   // null = not fetched yet; the list is fetched once per form and kept, so
@@ -103,7 +103,7 @@ export function NewProject({ api, onSubmit, onCancel, error, now }: {
     onSubmit({ url: what });
   };
 
-  if (step.at === 'kind') {
+  if (step.at === 'source') {
     return (
       <Screen title="add a project" error={error}
         footer={[{ key: 'enter', does: 'choose' }, { key: 'esc', does: 'back' }]}>
@@ -162,7 +162,7 @@ export function NewProject({ api, onSubmit, onCancel, error, now }: {
             if (pick.repo.added) { setNotice(`${pick.repo.owner}/${pick.repo.name} is already a project here`); return; }
             submitExisting(`${pick.repo.owner}/${pick.repo.name}`, 'pick');
           }}
-          onCancel={() => { setNotice(undefined); setStep({ at: 'kind' }); }}
+          onCancel={() => { setNotice(undefined); setStep({ at: 'source' }); }}
         />
       </Screen>
     );

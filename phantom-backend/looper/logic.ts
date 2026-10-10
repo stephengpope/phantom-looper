@@ -180,9 +180,9 @@ function unsentBriefings(card: CardShape, coder: readonly ModelMessage[], superv
  *    not a step)
  */
 export type LoopStep =
-  | { kind: 'supervisor'; append: string[] }
-  | { kind: 'deliver'; text: string }
-  | { kind: 'return'; text: string }
+  | { action: 'supervisor'; append: string[] }
+  | { action: 'deliver'; text: string }
+  | { action: 'return'; text: string }
   | null;
 
 export function nextStep(card: CardShape, coder: readonly ModelMessage[], supervisor: readonly ModelMessage[]): LoopStep {
@@ -191,12 +191,12 @@ export function nextStep(card: CardShape, coder: readonly ModelMessage[], superv
   const coderSent = replies(coder);
   const unported = coderSent.slice(repliesReceived(coderSent, userTexts(supervisor)));
   if (unported.length) {
-    return { kind: 'supervisor', append: [...unsentBriefings(card, coder, supervisor), ...unported] };
+    return { action: 'supervisor', append: [...unsentBriefings(card, coder, supervisor), ...unported] };
   }
 
   const supSent = replies(supervisor);
   const undelivered = supSent.slice(repliesReceived(supSent, userTexts(coder)));
-  if (undelivered.length) return { kind: 'deliver', text: undelivered.join('\n\n') };
+  if (undelivered.length) return { action: 'deliver', text: undelivered.join('\n\n') };
 
-  return { kind: 'return', text: toCodingAgent.cardIsBack(card) };
+  return { action: 'return', text: toCodingAgent.cardIsBack(card) };
 }

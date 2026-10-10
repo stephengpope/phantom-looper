@@ -296,7 +296,7 @@ export function makeTelegramSink(
     // is the worst outcome.
     for (const file of files) {
       try {
-        await client.sendBytes(file.kind, chatId, await deliver!.read(file.path), file.path.slice(file.path.lastIndexOf('/') + 1));
+        await client.sendBytes(file.type, chatId, await deliver!.read(file.path), file.path.slice(file.path.lastIndexOf('/') + 1));
       } catch (error) {
         await client.sendMessage(chatId, `⚠️ Couldn't send that file — ${(error as Error).message}`).catch(() => {});
       }

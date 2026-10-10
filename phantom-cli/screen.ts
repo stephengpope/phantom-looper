@@ -121,7 +121,7 @@ export function createScreen(real: NodeJS.WriteStream,
       // column); the emulator gets the original — both land on the same
       // screen, and the emulator is the record of it.
       const sent = trim.write(text);
-      trace?.({ kind: 'frame', in: text.length, out: sent.length,
+      trace?.({ type: 'frame', in: text.length, out: sent.length,
         rows: (sent.match(/\x1b\[K/g) ?? []).length, clear: sent.includes('\x1b[2J'), raw: text });
       const ok = real.write(sent, ...(rest as []));
       // The tty driver turns "\n" into "\r\n" on the way to the real terminal
@@ -160,7 +160,7 @@ export function createScreen(real: NodeJS.WriteStream,
   const onResize = (): void => {
     term.resize(real.columns || 80, real.rows || 24);
     trim.reset();
-    trace?.({ kind: 'resize', columns: real.columns, rows: real.rows });
+    trace?.({ type: 'resize', columns: real.columns, rows: real.rows });
     mirror.emit('resize');
   };
   real.on('resize', onResize);

@@ -1,4 +1,4 @@
-// One component per Part kind. The same components render both in <Static>
+// One component per Part type. The same components render both in <Static>
 // (finished) and in the live region (in flight) — the part's own flags decide.
 import { Box } from 'ink';
 import { Text } from './Text.js';
@@ -78,7 +78,7 @@ export function PartView({ part, width, expanded, maxRows = 12, userColor, compa
    *  input summary, no result. The board shows what happened. */
   compactTools?: boolean;
 }) {
-  switch (part.kind) {
+  switch (part.type) {
     case 'note': return <Box paddingLeft={2}><Text dimColor>{part.text}</Text></Box>;
     case 'worked': return (
       <Gutter width={width} marker={<Text dimColor>✻</Text>}>
@@ -124,7 +124,7 @@ export function UserMessage({ text, width, color }: { text: string; width: numbe
 // being typed renders as plain text — a half-written block has unbalanced
 // markers and reparsing it every token is what shimmers.
 function AssistantText({ part, width, maxRows }: {
-  part: Extract<Part, { kind: 'text' }>; width: number; maxRows: number;
+  part: Extract<Part, { type: 'text' }>; width: number; maxRows: number;
 }) {
   // The dot marks where a reply starts (`first` — one per message segment,
   // however many blocks the reply commits); later blocks get a blank gutter.
@@ -155,7 +155,7 @@ function AssistantText({ part, width, maxRows }: {
 // saying "Thinking" again beneath). Finished, it is one dim row — "∴ Thought
 // for 4s". ctrl+o shows the whole text, streaming or finished.
 function Thinking({ part, expanded, width }: {
-  part: Extract<Part, { kind: 'reasoning' }>; expanded: boolean; width: number;
+  part: Extract<Part, { type: 'reasoning' }>; expanded: boolean; width: number;
 }) {
   if (!expanded && !part.done) return null;
   const secs = Math.max(1, Math.round(((part.endedAt ?? Date.now()) - part.startedAt) / 1000));
@@ -170,7 +170,7 @@ function Thinking({ part, expanded, width }: {
 }
 
 function ToolRow({ part, width, expanded, maxRows, compact = false }: {
-  part: Extract<Part, { kind: 'tool' }>; width: number; expanded: boolean; maxRows: number; compact?: boolean;
+  part: Extract<Part, { type: 'tool' }>; width: number; expanded: boolean; maxRows: number; compact?: boolean;
 }) {
   const glyph =
     part.status === 'ok' ? <Text color="green">●</Text> :
