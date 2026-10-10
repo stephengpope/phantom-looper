@@ -86,6 +86,11 @@ export interface LoadedSession {
    *  launcher's meters, the cache %): the record's usage lines, as the agent
    *  sums them — refreshed on every step. */
   usage: TokenTotals;
+  /** The last model call's usage (the toolbar's context meter: `input` is
+   *  the context window as it stands, its cache share is that call's).
+   *  The record's last usage line — read, never computed, so it only moves
+   *  when a model call lands. Null before the first. */
+  lastCall: Readonly<TokenTotals> | null;
   /** What the working line says in place of the phase: a retry in progress,
    *  a stop on its way. Null = the phase (thinking, writing, the tool). */
   caption: string | null;
@@ -191,7 +196,7 @@ export class SessionStore {
       syncStamp: fresh.syncStamp ?? null,
       live: [], turn: [],
       remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS,
-      usage: { ...fresh.agent.session.usage }, caption: null,
+      usage: { ...fresh.agent.session.usage }, lastCall: fresh.agent.session.lastCall, caption: null,
       unseen: false, handedOffTo: null, ask: null, lastMessageAt: fresh.agent.session.messages.length ? Date.now() : 0, addedAt: ++this.seq,
       workState: null, draft: fresh.draft ?? '',
       flushParts: () => undefined, unwire: () => undefined,
@@ -254,7 +259,7 @@ export class SessionStore {
       }),
       // Every step lands lines on the record: the totals and the stamp move
       // with it, so the screen is known to match what the server holds.
-      a.on('step', ({ usage }) => { entry.usage = { ...usage }; entry.syncStamp = a.session.transcriptUpdatedAt; }),
+      a.on('step', ({ usage }) => { entry.usage = { ...usage }; entry.lastCall = a.session.lastCall; entry.syncStamp = a.session.transcriptUpdatedAt; }),
       a.on('reloaded', ({ messages, from, now, added }) => {
         // The conversation gained messages this window had not drawn (the
         // server's queued user messages — a dropped file, a detached command
@@ -352,6 +357,7 @@ export class SessionStore {
       entry.done = [...entry.done, ...rest];
       entry.live = [];
       entry.usage = { ...entry.agent.session.usage };
+      entry.lastCall = entry.agent.session.lastCall;
       entry.syncStamp = entry.agent.session.transcriptUpdatedAt;
       // An error counts as something to come back to, same as an answer.
       if (entry.id !== this.activeId) entry.unseen = true;
@@ -453,7 +459,7 @@ export class SessionStore {
    *  stands. `parts` null keeps what is drawn (a turn this window watched
    *  whole over the feed is richer than a replay). The agent reads the
    *  record itself at its next turn start. */
-  reseat(id: string, parts: Part[] | null, stamp: string | null, usage?: TokenTotals): void {
+  reseat(id: string, parts: Part[] | null, stamp: string | null, usage?: TokenTotals, lastCall?: Readonly<TokenTotals> | null): void {
     const entry = this.get(id);
     if (!entry) return;
     if (parts) {
@@ -463,6 +469,7 @@ export class SessionStore {
     }
     entry.syncStamp = stamp;
     if (usage) entry.usage = usage;
+    if (lastCall !== undefined) entry.lastCall = lastCall;
     this.notify();
   }
 

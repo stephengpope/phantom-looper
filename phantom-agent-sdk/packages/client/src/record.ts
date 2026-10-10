@@ -14,7 +14,7 @@
 // that sees them differ reads the lines after its own (`catchUp`) first.
 import type { BackendClient } from './backend.js';
 import { PhantomError } from './errors.js';
-import { addTotals, lineId, parseLines, usageTotals, type TokenTotals, type TranscriptLine } from './transcript.js';
+import { addTotals, lastUsage, lineId, parseLines, usageTotals, type TokenTotals, type TranscriptLine } from './transcript.js';
 
 interface TranscriptReply { data: string | null; lines: number; updated_at: string | null }
 
@@ -44,6 +44,8 @@ export class SessionRecord {
   get stamp(): string | null { return this.#stamp; }
   /** The tokens the record accounts for, whoever wrote them. */
   get usage(): Readonly<TokenTotals> { return this.#totals; }
+  /** The last model call's usage — `input` is the context window as it stands. */
+  get lastCall(): Readonly<TokenTotals> | null { return lastUsage(this.lines); }
 
   /** Someone else wrote: read only the lines after ours and add them. */
   async catchUp(signal?: AbortSignal): Promise<TranscriptLine[]> {

@@ -90,6 +90,18 @@ export function usageTotals(lines: readonly TranscriptLine[]): TokenTotals {
   return totals;
 }
 
+/** The last model call's usage — its `input` is the context window as it
+ *  stands (the whole prompt that call carried, cached or not). Null before
+ *  the first call. Scans from the end: the usage line sits within a few
+ *  lines of it (only tool results land after). */
+export function lastUsage(lines: readonly TranscriptLine[]): Readonly<TokenTotals> | null {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (line?.type === 'usage') return { input: line.input, output: line.output, cacheRead: line.cacheRead, cacheWrite: line.cacheWrite };
+  }
+  return null;
+}
+
 export const addTotals = (a: TokenTotals, b: TokenTotals): TokenTotals =>
   ({ input: a.input + b.input, output: a.output + b.output, cacheRead: a.cacheRead + b.cacheRead, cacheWrite: a.cacheWrite + b.cacheWrite });
 

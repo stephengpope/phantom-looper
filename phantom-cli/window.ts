@@ -14,7 +14,7 @@ import { basename } from 'node:path';
 import type { Tool } from 'ai';
 import { SessionStore, activeHold, type LoadedSession, type ModelLine } from './sessions.js';
 import type { AgentHandlers, BackendClient, ToolKit } from '@phantom-agent-sdk/client';
-import { parseLines, conversationFrom, usageTotals } from '@phantom-agent-sdk/client/transcript';
+import { parseLines, conversationFrom, usageTotals, lastUsage } from '@phantom-agent-sdk/client/transcript';
 import { CodingAgent } from '../phantom-looper/agents/coding.js';
 import { AssistantAgent } from '../phantom-looper/agents/assistant.js';
 import { SessionFeed } from './sessionFeed.js';
@@ -657,7 +657,7 @@ export class WindowStore {
       ...cur.done.slice(0, 2),
       { kind: 'note', id: nextId('note'), text: 'refreshed — this session moved forward elsewhere' } as Part,
       ...messagesToParts(conversationFrom(lines)),
-    ], transcript.updated_at ?? server, usageTotals(lines));
+    ], transcript.updated_at ?? server, usageTotals(lines), lastUsage(lines));
   };
 
   // ── what is on screen ─────────────────────────────────────────────────────
@@ -773,6 +773,36 @@ export class WindowStore {
   /** The name to say for a project id — the id itself when unknown, which
    *  is still an answer rather than a blank. */
   wsLabel(id: string): string { return this.projectNames.get(id)?.label ?? id; }
+
+  /** The model catalog's context windows, by provider — one GET /models per
+   *  provider for the window's life, read behind the first toolbar draw that
+   *  needs it. The toolbar's context meter is `48k (24%)` with the limit and
+   *  `48k` without: 0 (unknown model, call failed) drops the share, never
+   *  guesses it. A display cache like projectNames. */
+  private readonly contextWindows = new Map<string, Map<string, number>>();
+  private readonly contextWindowReads = new Set<string>();
+
+  /** The model's context window in tokens, 0 while unknown. The first ask
+   *  for a provider starts the read; the toolbar redraws when it lands. */
+  contextWindowOf(provider: string, model: string): number {
+    const known = this.contextWindows.get(provider);
+    if (known) return known.get(model) ?? 0;
+    if (!this.contextWindowReads.has(provider)) {
+      this.contextWindowReads.add(provider);
+      void (async () => {
+        try {
+          const reply = await this.api('GET', `/models?provider=${encodeURIComponent(provider)}`) as
+            { models?: { id: string; contextWindow?: number }[] };
+          this.contextWindows.set(provider, new Map((reply.models ?? []).map((row) => [row.id, row.contextWindow ?? 0])));
+          this.notify();
+        } catch (entry) {
+          this.contextWindowReads.delete(provider);   // ask again next draw
+          quiet(`read the model catalog for ${provider}`)(entry);
+        }
+      })();
+    }
+    return 0;
+  }
 
   /** What the toolbar calls the work in front of you: the card the session is
    *  building, named the way the board names it (`PHA-7`), and failing that
