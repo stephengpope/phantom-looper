@@ -62,6 +62,14 @@ export interface IdentityOptions {
    *  ids and urls given (the invitation has no url of its own: the page
    *  where the invitee signs in and accepts is the app's). */
   mail?: Partial<MailTemplates>;
+  /** Called before an invitation is created — the gate for subscription
+   *  checks, seat limits, or any rule the app enforces on who may be
+   *  invited. Runs inside Better Auth's own flow, so it covers the raw
+   *  `/api/auth/organization/invite-member` endpoint too. Throw to refuse
+   *  (the error's message reaches the caller); return or resolve to allow. */
+  beforeInvite?: (data: { email: string; role: string; organizationId: string;
+    inviter: { id: string; email: string; name: string };
+    organization: { id: string; name: string; slug: string } }) => Promise<void>;
 }
 
 export interface OAuthApp { clientId: string; clientSecret: string }
@@ -239,6 +247,17 @@ function buildAuth({ database, mailer, settings, projects, media, options, baseU
       }),
       organization({
         organizationHooks: {
+          // The app's gate: subscription checks, seat limits, any rule on
+          // who may be invited. Covers the raw endpoint — no way around it.
+          ...(options.beforeInvite ? { beforeCreateInvitation: async (
+            { invitation, inviter, organization: org }: { invitation: { email: string; role: string; organizationId: string }; inviter: Record<string, unknown>; organization: Record<string, unknown> },
+          ) => {
+            await options.beforeInvite!({
+              email: invitation.email, role: invitation.role, organizationId: invitation.organizationId,
+              inviter: { id: String(inviter.id), email: String(inviter.email), name: String(inviter.name) },
+              organization: { id: String(org.id), name: String(org.name), slug: String(org.slug) },
+            });
+          } } : {}),
           // Its projects are not the organization's to take with it: they are
           // deleted or moved first (056 restricts it too).
           beforeDeleteOrganization: async ({ organization: going }) => {
