@@ -31,9 +31,9 @@ export type Part =
       status: 'pending' | 'running' | 'ok' | 'error';
       output?: unknown; error?: string;
       startedAt: number; endedAt?: number;
-      /** Still running after this window handed the turn off: the api
-       *  finishes it and the record brings the result. The runner's name. */
-      finishingOn?: string;
+      /** Still running where it always ran — the session — after this window
+       *  handed the turn off; the api writes its result, the record redraws it. */
+      handedOff?: boolean;
     }
   | { kind: 'error'; id: string; message: string };
 
@@ -235,7 +235,7 @@ export function finalize(turn: Part[], now = Date.now(), opts: { handedOffTo?: s
     // the turn was HANDED OFF, when the api finishes the call and writes its
     // result; it stays open, saying where, until the record redraws it.
     if (part.kind === 'tool' && (part.status === 'pending' || part.status === 'running')) {
-      return opts.handedOffTo ? { ...part, finishingOn: opts.handedOffTo }
+      return opts.handedOffTo ? { ...part, handedOff: true }
         : { ...part, status: 'error' as const, error: 'interrupted', endedAt: now };
     }
     return part;
