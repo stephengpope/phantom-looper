@@ -1,5 +1,5 @@
-// The one line under the typing area: the mode mark — '» plan' or
-// '» code' (📌 replaces » when the session is pinned), ALWAYS shown while
+// The one line under the typing area: the mode diamond — ◆ (code) or
+// ◇ (plan), 📌 replaces it when the session is pinned — ALWAYS shown while
 // a session is on screen so you know which before you type — with the
 // transient notices (ctrl+c's "again to quit")
 // composed after it by App. Padded one cell to align with the `> ` prompt
@@ -33,15 +33,20 @@ export type ToolbarPart = string | { text: string; mark: string };
  *  between groups, so the eye parses facts, not a flat list of fields. */
 export type ToolbarGroup = ToolbarPart[];
 
-export function Toolbar({ groups = [], spin, spinWho, spinSince, toast, pinned }: {
-  groups?: ToolbarGroup[]; spin?: string; spinWho?: string;
+export function Toolbar({ groups = [], spinWho, spinSince, toast, pinned, planMode, workColor }: {
+  groups?: ToolbarGroup[]; spinWho?: string;
   /** When the running turn began (epoch ms), so the spinner can age. */
   spinSince?: number;
   /** A timed message overriding the normal content — white text on a colored
    *  background (the `bg` field). Auto-dismissed by the caller's timer. */
   toast?: { text: string; bg: string };
-  /** Session is pinned — show 📌 instead of ». */
-  pinned?: boolean }) {
+  /** Session is pinned — 📌 before the git dot. */
+  pinned?: boolean;
+  /** Plan mode: ◇ (open diamond). Code mode: ◆ (filled diamond). */
+  planMode?: boolean;
+  /** Git work state dot color: red (not pushed), yellow (not merged),
+   *  green (merged), gray (unknown). Null hides the dot. */
+  workColor?: string | null }) {
   const { cols } = useContext(SizeContext);
   if (toast) return (
     <Box paddingLeft={1} width={cols} height={1} overflow="hidden"><Text backgroundColor={toast.bg} color="white" bold>{` ${toast.text} `}</Text></Box>
@@ -49,14 +54,16 @@ export function Toolbar({ groups = [], spin, spinWho, spinSince, toast, pinned }
   const shown = groups
     .map((group) => group.filter((part) => (typeof part === 'string' ? part : part.text)))
     .filter((group) => group.length);
-  if (!shown.length && !spin) return (
+  if (!shown.length && !spinWho) return (
     // The held blank row — same shape as the real line, one cell of content
     // so yoga keeps the height.
     <Box paddingLeft={1} width={cols} height={1} overflow="hidden"><Text> </Text></Box>
   );
   return (
     <Box paddingLeft={1} width={cols} height={1} overflow="hidden">
-      <Text color="yellow">{pinned ? '📌 ' : '» '}</Text>
+      {pinned ? <Text color="yellow">{'📌 '}</Text> : null}
+      <Text color="yellow">{planMode ? '◇ ' : '◆ '}</Text>
+      {workColor ? <Text color={workColor}>{'• '}</Text> : null}
       {shown.map((group, groupIndex) => (
         <Text key={groupIndex} color="yellow">
           {groupIndex > 0 ? ' · ' : ''}
@@ -68,11 +75,11 @@ export function Toolbar({ groups = [], spin, spinWho, spinSince, toast, pinned }
           ))}
         </Text>
       ))}
-      {spin ? (<>
+      {spinWho ? (<>
         {shown.length ? <Text color="yellow"> · </Text> : null}
-        {spinWho ? <Text color="yellow">{`${spinWho} `}</Text> : null}
-        <Text color={turnAgeColor(spinSince)}><Spinner type="dots" /></Text>
-        <Text color="yellow">{` ${spin}`}</Text>
+        {spinWho === 'host'
+          ? <Text color="yellow">{spinWho}</Text>
+          : <><Text color={turnAgeColor(spinSince)}><Spinner type="dots" /></Text><Text color="yellow">{` ${spinWho}`}</Text></>}
       </>) : null}
     </Box>
   );

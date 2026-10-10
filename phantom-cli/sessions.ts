@@ -103,6 +103,10 @@ export interface LoadedSession {
   lastMessageAt: number;
   /** Insertion counter — the tie-break while nothing has been said yet. */
   addedAt: number;
+  /** The input tokens from the LAST model call — the current context window
+   *  usage as reported by the provider. Updated on each step by diffing the
+   *  cumulative total. Zero until the first step lands. */
+  lastInput: number;
   /** Where this session's code stands. Null before the first poll lands. */
   workState: 'not_pushed' | 'not_merged' | 'merged' | null;
   /** The unsent text in the prompt when the user switched away from this
@@ -193,7 +197,7 @@ export class SessionStore {
       remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS,
       usage: { ...fresh.agent.session.usage }, caption: null,
       unseen: false, handedOffTo: null, ask: null, lastMessageAt: fresh.agent.session.messages.length ? Date.now() : 0, addedAt: ++this.seq,
-      workState: null, draft: fresh.draft ?? '',
+      lastInput: 0, workState: null, draft: fresh.draft ?? '',
       flushParts: () => undefined, unwire: () => undefined,
     };
     entry.unwire = this.wire(entry);
@@ -254,7 +258,7 @@ export class SessionStore {
       }),
       // Every step lands lines on the record: the totals and the stamp move
       // with it, so the screen is known to match what the server holds.
-      a.on('step', ({ usage }) => { entry.usage = { ...usage }; entry.syncStamp = a.session.transcriptUpdatedAt; }),
+      a.on('step', ({ usage }) => { entry.lastInput = usage.input - entry.usage.input; entry.usage = { ...usage }; entry.syncStamp = a.session.transcriptUpdatedAt; }),
       a.on('reloaded', ({ messages, from, now, added }) => {
         // The conversation gained messages this window had not drawn (the
         // server's queued user messages — a dropped file, a detached command

@@ -40,7 +40,7 @@ import { Text } from './components/Text.js';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { Tool } from 'ai';
 import type { BackendClient } from '@phantom-agent-sdk/client';
-import { phaseLabel, tokenCount, formatTokensIn, formatTokensOut, cachePct } from './state.js';
+import { phaseLabel, tokenCount, formatTokens, cachePct } from './state.js';
 import { activeHold } from './sessions.js';
 import { COMMANDS, complete, matches } from './commands.js';
 import { quiet, type Api } from './request.js';
@@ -53,7 +53,7 @@ import { PartView, UserMessage, HIGHLIGHT_BG, HIGHLIGHT_FG } from './components/
 import { Prompt } from './components/Prompt.js';
 import { StatusLine } from './components/StatusLine.js';
 import { Toolbar, type ToolbarGroup, type ToolbarPart } from './components/Toolbar.js';
-import { WORK } from './components/Launcher.js';
+
 import { SizeContext, keyLine } from './components/Screen.js';
 import { InputGate } from './components/useInput.js';
 import { Pane } from './components/Pane.js';
@@ -648,25 +648,21 @@ export function App({
   const menuAbove = menuFrom;
   const menuBelow = suggestions.length - menuFrom - menuRows.length;
 
-  // The toolbar's mode mark — ALWAYS on while a session is on screen: the
-  // line says which mode you are in before you type, 'plan' or
-  // 'code'. The » prefix (or 📌 when pinned) is rendered by the Toolbar
-  // itself on the far left. A supervisor record has no modes — you cannot
-  // chat there at all.
-  const modeMark = session ? (session.planMode ? 'plan' : 'code') : undefined;
+  // The toolbar's mode — ALWAYS on while a session is on screen: the ◆/◇
+  // diamond on the far left says which mode you are in before you type.
+  // Pinned shows 📌 instead. Rendered by the Toolbar itself.
   // Which card this session is building — the board's own name for it
   // (`PHA-7`), so the line you read while typing answers "what am I working
   // on" without opening anything. With no card attached the project prefix
   // alone (`PHA`) still shows: you always know which project.
   const cardMark = windowStore.cardMark;
-  // The git work dot — where the session's code stands, the colored • ahead
-  // of the words: red = not pushed, yellow = not merged, green = merged. The
-  // same WORK map the /resume table draws from (Launcher.tsx), so the three
-  // places the state shows — /resume, this line, the board — cannot disagree.
-  // Null + history means the container is off and we can't verify — "unknown".
-  const workMark: ToolbarPart | undefined = session?.workState
-    ? WORK[session.workState]
-    : session?.history.length ? { text: 'unknown', mark: 'gray' } : undefined;
+  // The git dot color — red (not pushed), yellow (not merged), green (merged),
+  // gray (unknown / container off). Null before first history.
+  const WORK_COLOR: Record<string, string> = { not_pushed: 'red', not_merged: 'yellow', merged: 'green' };
+  const workColor = session?.workState
+    ? WORK_COLOR[session.workState]
+    : session?.history.length ? 'gray' : null;
+
   // The task count — shown only when > 0. A zero is not news; it appearing
   // and vanishing is the signal that something started or stopped.
   const taskMark = session && windowStore.taskCount != null && windowStore.taskCount > 0
@@ -675,20 +671,18 @@ export function App({
   // The model this session is running on — always shown so you know what you
   // are talking to. Before the first message it follows /settings and /presets;
   // after, it is fixed for life.
-  const modelMark = session?.summary.model;
-  // The session's lifetime token meters, right of the model — the same
-  // shapes and the same rule as /resume's tokens column: the output count
-  // (the expensive ones) is the exact sum at the last seat plus whatever a
-  // running turn has streamed on top; the cache hit rate (state.ts's one
-  // rule) rides the INPUT meter — caching is a property of prompt tokens,
-  // never of output. Hidden at zero — a fresh session has no news yet.
-  const tokensShown = session
-    ? session.usage.output + ((session.busy || session.remoteBusy) ? tokenCount(session.tokens) : 0) : 0;
+  // Strip the provider prefix from the model ID when it starts with
+  // `{provider}-` — `anthropic-claude-sonnet-4-5` → `claude-sonnet-4-5`.
+  const rawModel = session?.summary.model;
+  const provider = session?.summary.provider;
+  const modelMark = rawModel && provider && rawModel.startsWith(`${provider}-`)
+    ? rawModel.slice(provider.length + 1) : rawModel;
+  // The context meter — the last model call's input tokens (= current context
+  // window usage) with the cache hit rate. Shows how full the window is right
+  // now. Hidden until the first step lands (lastInput is 0 before that).
   const pct = session ? cachePct(session.usage.input, session.usage.cacheRead, session.usage.cacheWrite) : null;
-  const inMeter = session && session.usage.input > 0
-    ? formatTokensIn(session.usage.input) + (pct != null ? ` (${pct}%)` : '') : '';
-  const outMeter = tokensShown > 0 ? formatTokensOut(tokensShown) : '';
-  const tokensMark = [inMeter, outMeter].filter(Boolean).join(' ') || undefined;
+  const contextMeter = session && session.lastInput > 0
+    ? formatTokens(session.lastInput) + (pct != null ? ` (${pct}%)` : '') : undefined;
   // The session's name (from /rename or the auto-title); a fresh session
   // without one yet shows nothing here. Kept current by /rename and the
   // staleness GET (window.ts), so the line moves the moment the name lands.
@@ -697,14 +691,12 @@ export function App({
   const trimmedName = rawName && rawName.length > MAX_NAME
     ? `${rawName.slice(0, MAX_NAME - 1)}…` : rawName;
   const nameMark = trimmedName ? `· ${trimmedName}` : undefined;
-  // Order: the mode, the card, the session's name, the git work dot (red =
-  // not pushed, yellow = not merged, green = merged), the model with its
-  // token meter, the tasks, a notice pinned last. The model and its meter
-  // answer ONE question so they ride in one group — the line reads
-  // `code · PHA-7 my session • not pushed · gpt-5 ↑ 48.2k (84%) ↓ 12.4k`,
-  // facts separated by ` · `, not a flat list of fields.
+  // Order: the card with its name, the model with its context meter, the
+  // tasks, a notice pinned last. The mode diamond (◆/◇) is the far-left
+  // prefix rendered by Toolbar itself. The line reads
+  // `◆ • PHA-7 · my session · claude-sonnet-4-5 · 48.2k (84%) · 2 tasks`.
   const withMode = (rest?: string): ToolbarGroup[] =>
-    [[modeMark], [cardMark, nameMark, workMark], [modelMark, tokensMark], [taskMark], [rest]]
+    ([[cardMark, nameMark], [modelMark], [contextMeter], [taskMark], [rest]] as (ToolbarPart | undefined)[][])
       .map((group) => group.filter((part): part is ToolbarPart => Boolean(part)))
       .filter((group) => group.length);
 
@@ -849,17 +841,15 @@ export function App({
               columns={promptCols} onBoundary={onBoundary}
               historyAt={histAt} historyTotal={said.length} />}
             <Toolbar
-              // Held elsewhere: the marks, then WHO is working, the spinner,
-              // and WHAT they are doing — `coding agent ⠹ building`. No
-              // sentence about being locked out: the spinner says something
-              // is running, and typing says the rest.
-              // During `opening` the toolbar has nothing to say — the old
-              // session's marks must not leak onto the splash screen.
-              spin={!windowStore.opening && session && !session.busy && heldNow ? heldNow.label : undefined}
+              // Held elsewhere: `⠹ coding agent`. During `opening` the
+              // toolbar has nothing to say — the old session's marks must
+              // not leak onto the splash screen.
               spinWho={!windowStore.opening && session && !session.busy && heldNow ? heldNow.who : undefined}
               spinSince={!windowStore.opening && session && !session.busy && heldNow ? session.startedAt : undefined}
               toast={windowStore.toast ?? undefined}
               pinned={session?.pinned}
+              planMode={session?.planMode}
+              workColor={workColor}
               groups={
               windowStore.opening ? []
               : ctrlC ? withMode('press ctrl+c again to quit')
