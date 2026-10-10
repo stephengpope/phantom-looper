@@ -653,11 +653,15 @@ export class WindowStore {
     // keepScreen: the feed showed us this whole turn as it happened, so the
     // record brings the stamp and the totals and the screen keeps what it
     // drew — richer than a replay, and no repaint to jump through.
-    this.sessions.reseat(id, keepScreen ? null : [
+    // After a hand-off the screen is never kept: the api wrote the results
+    // of the calls this window left open, and only the record has them.
+    const handedOffTo = cur.handedOffTo;
+    this.sessions.reseat(id, keepScreen && !handedOffTo ? null : [
       ...cur.done.slice(0, 2),
-      { kind: 'note', id: nextId('note'), text: 'refreshed — this session moved forward elsewhere' } as Part,
+      { kind: 'note', id: nextId('note'), text: handedOffTo ? `continued on ${handedOffTo}` : 'refreshed — this session moved forward elsewhere' } as Part,
       ...messagesToParts(conversationFrom(lines)),
     ], transcript.updated_at ?? server, usageTotals(lines));
+    if (handedOffTo) this.sessions.clearHandedOff(id);
   };
 
   // ── what is on screen ─────────────────────────────────────────────────────
