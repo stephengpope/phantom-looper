@@ -40,7 +40,7 @@ import { Text } from './components/Text.js';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { Tool } from 'ai';
 import type { BackendClient } from '@phantom-agent-sdk/client';
-import { phaseLabel, tokenCount, formatTokens, cachePct } from './state.js';
+import { phaseLabel, tokenCount, formatTokensIn, formatTokensOut, cachePct } from './state.js';
 import { activeHold } from './sessions.js';
 import { COMMANDS, complete, matches } from './commands.js';
 import { quiet, type Api } from './request.js';
@@ -677,12 +677,19 @@ export function App({
   const provider = session?.summary.provider;
   const modelMark = rawModel && provider && rawModel.startsWith(`${provider}-`)
     ? rawModel.slice(provider.length + 1) : rawModel;
-  // The context meter — the last model call's input tokens (= current context
-  // window usage) with the cache hit rate. Shows how full the window is right
-  // now. Hidden until the first step lands (lastInput is 0 before that).
+  // The session's lifetime token meters, right of the model — the same
+  // shapes and the same rule as /resume's tokens column: the output count
+  // (the expensive ones) is the exact sum at the last seat plus whatever a
+  // running turn has streamed on top; the cache hit rate (state.ts's one
+  // rule) rides the INPUT meter — caching is a property of prompt tokens,
+  // never of output. Hidden at zero — a fresh session has no news yet.
+  const tokensShown = session
+    ? session.usage.output + ((session.busy || session.remoteBusy) ? tokenCount(session.tokens) : 0) : 0;
   const pct = session ? cachePct(session.usage.input, session.usage.cacheRead, session.usage.cacheWrite) : null;
-  const contextMeter = session && session.lastInput > 0
-    ? formatTokens(session.lastInput) + (pct != null ? ` (${pct}%)` : '') : undefined;
+  const inMeter = session && session.usage.input > 0
+    ? formatTokensIn(session.usage.input) + (pct != null ? ` (${pct}%)` : '') : '';
+  const outMeter = tokensShown > 0 ? formatTokensOut(tokensShown) : '';
+  const tokensMark = [inMeter, outMeter].filter(Boolean).join(' ') || undefined;
   // The session's name (from /rename or the auto-title); a fresh session
   // without one yet shows nothing here. Kept current by /rename and the
   // staleness GET (window.ts), so the line moves the moment the name lands.
@@ -691,12 +698,13 @@ export function App({
   const trimmedName = rawName && rawName.length > MAX_NAME
     ? `${rawName.slice(0, MAX_NAME - 1)}…` : rawName;
   const nameMark = trimmedName ? `· ${trimmedName}` : undefined;
-  // Order: the card with its name, the model with its context meter, the
-  // tasks, a notice pinned last. The mode diamond (◆/◇) is the far-left
-  // prefix rendered by Toolbar itself. The line reads
-  // `◆ • PHA-7 · my session · claude-sonnet-4-5 · 48.2k (84%) · 2 tasks`.
+  // Order: the card with its name, the model with its token meters, the
+  // tasks, a notice pinned last. The model and its meters answer ONE
+  // question so they ride in one group. The mode diamond (◆/◇) is the
+  // far-left prefix rendered by Toolbar itself. The line reads
+  // `◆ • PHA-7 · my session · claude-sonnet-4-5 ↑ 48.2k (84%) ↓ 12.4k · 2 tasks`.
   const withMode = (rest?: string): ToolbarGroup[] =>
-    ([[cardMark, nameMark], [modelMark], [contextMeter], [taskMark], [rest]] as (ToolbarPart | undefined)[][])
+    ([[cardMark, nameMark], [modelMark, tokensMark], [taskMark], [rest]] as (ToolbarPart | undefined)[][])
       .map((group) => group.filter((part): part is ToolbarPart => Boolean(part)))
       .filter((group) => group.length);
 
