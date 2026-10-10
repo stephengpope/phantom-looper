@@ -66,7 +66,9 @@ export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pas
     >
       {browsing && (
         <Box>
-          <Text dimColor>{`   History ${historyTotal! - historyAt + 1}/${historyTotal} `}</Text>
+          {/* Mirrors the bottom rule's `━━` lead-in so the label sits in the
+              rule instead of floating in blank space. */}
+          <Text dimColor>{`━━ History ${historyTotal! - historyAt + 1}/${historyTotal} `}</Text>
           <Box flexGrow={1} borderStyle="bold" borderTop borderBottom={false} borderLeft={false} borderRight={false} borderDimColor />
         </Box>
       )}
