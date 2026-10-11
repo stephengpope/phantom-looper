@@ -215,3 +215,39 @@ test('8. disconnect mid tool call: handoffNow takes it, the loop is cut, nothing
   assert.deepEqual(roles, ['user', 'assistant'], 'the call is recorded; its result is the api\'s to write');
   assert.ok(!lines.some((line) => line.type === 'interrupted'));
 });
+
+test('9. disconnect BEFORE the tool starts (mid reply): the server tool is started, then the turn hands off at once — not after the tool ends', async () => {
+  const { model, prompts } = mockModel([callsTool(), saysText('never')]);
+  const lines: TranscriptLine[] = [];
+  let toolStarted = false;
+  let toolAborted = false;
+  let toolFinished = false;
+  const input = turnInput(model, [], ['go'], lines);
+  input.recordedByServer = new Set(['look']);
+  // The disconnect landed while the model was still writing: nothing to hand
+  // off yet, and the listener (fired then) had nothing to act on.
+  input.handoff = () => true;
+  input.onDisconnect = () => () => undefined;
+  input.handoffNow = async () => true;
+  input.tools = {
+    look: tool({
+      description: 'slow', inputSchema: jsonSchema<{ at: string }>({ type: 'object', properties: { at: { type: 'string' } } }),
+      // A long server tool (a two-minute bash): the hand-off must not wait for it.
+      execute: (_args, options) => new Promise((resolve, reject) => {
+        toolStarted = true;
+        options?.abortSignal?.addEventListener('abort', () => { toolAborted = true; reject(new Error('aborted')); });
+        setTimeout(() => { toolFinished = true; resolve({ saw: 'late' }); }, 500);
+      }),
+    }),
+  };
+  const started = Date.now();
+  const result = await runTurn(input);
+  assert.equal(result.outcome, 'handed_off');
+  assert.ok(toolStarted, 'the tool was started — the api owns it from here');
+  assert.ok(toolAborted && !toolFinished, 'the loop was cut under the running tool; it did not run to its end here');
+  assert.ok(Date.now() - started < 400, `handed off at once, not after the tool (${Date.now() - started}ms)`);
+  assert.equal(prompts().length, 1);
+  const roles = lines.filter((line) => line.type === 'message').map((line) => line.message.role);
+  assert.deepEqual(roles, ['user', 'assistant'], 'the call is recorded; its result is the api\'s to write');
+  assert.ok(!lines.some((line) => line.type === 'interrupted'));
+});

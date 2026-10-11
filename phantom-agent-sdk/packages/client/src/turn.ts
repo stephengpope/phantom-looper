@@ -32,10 +32,12 @@
 //   handed off          → nothing. At a STEP BOUNDARY (the model answered,
 //                         every tool result in) `handoff()` is a stop condition
 //                         and the record is whole. MID TOOL CALLS (the model
-//                         answered, server tools still running) a disconnect
-//                         hands off at once (`handoffNow`): the loop is cut, the
-//                         api finishes the tools and writes their results, and
-//                         the next driver starts once they are in.
+//                         answered, server tools running) the turn hands off at
+//                         once (`handoffNow`): the loop is cut, the api finishes
+//                         the tools and writes their results, and the next
+//                         driver starts once they are in. Asked mid reply, the
+//                         hand-off takes the moment the first server tool of the
+//                         next step is on its way — never after it ends.
 import { streamText, stepCountIs, hasToolCall, type AssistantContent, type LanguageModel, type ModelMessage, type SystemModelMessage,
   type TextStreamPart, type Tool, type ToolCallPart } from 'ai';
 import { PhantomError, asPhantomError } from './errors.js';
@@ -225,14 +227,20 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
     let handingOff = false;
     /** Server tool calls running right now — what a disconnect can leave to the api. */
     let serverToolsInFlight = 0;
-    const offDisconnect = input.onDisconnect(() => {
-      if (!step.assistantRecorded || serverToolsInFlight === 0 || handingOff) return;
+    /** Hand off now, if the turn is where it can: the call is in the record
+     *  and a server tool is running (the api finishes it). Tried at the two
+     *  moments that can newly hold — the disconnect itself, and a server tool
+     *  starting when a hand-off is pending. A disconnect that lands mid reply
+     *  is nothing to act on yet; the next tool start is where it takes. */
+    const handoffNow = () => {
+      if (handingOff || !step.assistantRecorded || serverToolsInFlight === 0) return;
       handingOff = true;
       void input.handoffNow().then((taken) => {
         if (taken) { handedOffMidTools = true; abort.abort(new Error('handed off')); }
         else handingOff = false;
       });
-    });
+    };
+    const offDisconnect = input.onDisconnect(handoffNow);
     /** Set by the breaker: the stream is cut like a stop, the cut step
      *  recorded, then this is thrown instead of the stop's return. */
     let tripped: PhantomError | undefined;
@@ -263,7 +271,7 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
       model: input.model,
       instructions: input.system,
       messages: [...history, ...tally.added, ...state.drivers],
-      tools: gated(input.tools, step, input.recordedByServer, (delta) => { serverToolsInFlight += delta; }),
+      tools: gated(input.tools, step, input.recordedByServer, (delta) => { serverToolsInFlight += delta; if (delta > 0 && input.handoff()) handoffNow(); }),
       stopWhen: [
         ...(input.maxSteps == null ? [] : [stepCountIs(input.maxSteps)]),
         ...(input.terminal.length ? [hasToolCall(...input.terminal)] : []),
@@ -419,7 +427,9 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
 /** The tools, each gated: it runs once this step's assistant message landed
  *  in the record (the AI SDK starts tools after the model call ended, so the
  *  write is queued by then — this waits for it to land), so a result can
- *  never precede its call. Server tools also count themselves in flight. */
+ *  never precede its call. Server tools also count themselves in flight —
+ *  counted AFTER the call went out, so whoever acts on the count (a hand-off)
+ *  acts on a request the api has. */
 function gated(tools: Record<string, Tool>, step: StepInFlight, server: ReadonlySet<string>, inFlight: (delta: 1 | -1) => void): Record<string, Tool> {
   const out: Record<string, Tool> = {};
   for (const [name, tool] of Object.entries(tools)) {
@@ -428,8 +438,9 @@ function gated(tools: Record<string, Tool>, step: StepInFlight, server: Readonly
     out[name] = { ...tool, execute: async (args: unknown, options: unknown) => {
       await step.written;
       const counted = server.has(name);
+      const running = inner(args, options);
       if (counted) inFlight(1);
-      try { return await inner(args, options); }
+      try { return await running; }
       finally { if (counted) inFlight(-1); }
     } };
   }
