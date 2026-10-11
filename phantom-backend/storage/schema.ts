@@ -21,6 +21,9 @@ export const telegramChatState = phantomLooper.table('telegram_chat_state', {
   // /stream: what of the session the chat is on streams in — on, all, off
   // (telegram/watch.ts). Migration 005.
   stream: text('stream').notNull().default('on'),
+  // The chat's assistant session (006): its own conversation, resumed across
+  // restarts. A foreign key — a deleted session clears it.
+  assistantSessionId: text('assistant_session_id'),
 });
 
 // The looper's two switches on a card (002): auto_plan gates the plan

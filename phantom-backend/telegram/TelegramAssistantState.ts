@@ -16,6 +16,8 @@ export interface TelegramAssistantStateRow {
   activeProjectId: string | null;
   /** What of the session the chat is on streams in (telegram/watch.ts). */
   stream: TelegramStream;
+  /** The chat's own assistant conversation; null until the first assistant turn. */
+  assistantSessionId: string | null;
 }
 
 export const MODE_MESSAGE: Record<TelegramMode, string> = {
@@ -23,7 +25,7 @@ export const MODE_MESSAGE: Record<TelegramMode, string> = {
   assistant: "🏠 You're now talking to the assistant.",
 };
 
-const EMPTY: TelegramAssistantStateRow = { mode: 'assistant', activeSessionId: null, activeProjectId: null, stream: 'on' };
+const EMPTY: TelegramAssistantStateRow = { mode: 'assistant', activeSessionId: null, activeProjectId: null, stream: 'on', assistantSessionId: null };
 
 export class TelegramAssistantState {
   constructor(private readonly database: Drizzle) {}
@@ -37,7 +39,8 @@ export class TelegramAssistantState {
     }
     const row = rows[0];
     return { mode: row.mode === 'code' ? 'code' : 'assistant', activeSessionId: row.activeSessionId, activeProjectId: row.activeProjectId,
-      stream: (STREAM_MODES as readonly string[]).includes(row.stream) ? row.stream as TelegramStream : 'on' };
+      stream: (STREAM_MODES as readonly string[]).includes(row.stream) ? row.stream as TelegramStream : 'on',
+      assistantSessionId: row.assistantSessionId };
   }
 
   private async patch(chatId: number, values: Omit<Partial<typeof telegramChatState.$inferInsert>, 'chatId'>): Promise<void> {
@@ -58,6 +61,12 @@ export class TelegramAssistantState {
    *  the mode is untouched. The session must exist (foreign key). */
   async setActiveSession(chatId: number, sessionId: string): Promise<void> {
     await this.patch(chatId, { activeSessionId: sessionId });
+  }
+
+  /** The chat's assistant session: set when one is made, cleared when it is
+   *  found gone. The session must exist (foreign key). */
+  async setAssistantSession(chatId: number, sessionId: string | null): Promise<void> {
+    await this.patch(chatId, { assistantSessionId: sessionId });
   }
 
   /** /stream — what of the session the chat is on streams in. */
