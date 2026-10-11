@@ -1,8 +1,8 @@
-// Disk cleanup against fakes: the rule and the loop, nothing else.
+// free_disk_space against fakes: the rule and the loop, nothing else.
 // Run: npm test (tsx --test, node's runner) in this package.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { tooFull, diskCleanup, MIN_FREE_GB, type CleanupDeps, type DiskState } from './Disk.js';
+import { tooFull, diskCleanup, MIN_FREE_GB, type CleanupDeps, type DiskState } from './freeDiskSpace.js';
 import type { SessionRow, ProjectRow } from '../storage/schema.js';
 
 const HOUR = 60 * 60_000;

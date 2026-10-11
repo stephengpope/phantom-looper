@@ -44,6 +44,7 @@ export type { SettingsChanged } from './agents/SettingsEvents.js';
 export { hasEmbeddedCredentials, parseGitHubUrl, parseRepoRef, remoteUrl } from './git/remote.js';
 export type { CardRow, CronRow, ProjectRow, WorkspaceRow, SessionRow, UserRow, OrganizationRow, MemberRow, InvitationRow, ApiKeyRow, MediaRow } from './storage/schema.js';
 export * as checkoutPool from './runtime/CheckoutPool.js';
+export { Maintenance, MaintenanceError, type MaintenanceJob, type MaintenanceRun, type MaintenanceView } from './maintenance/Maintenance.js';
 
 // runtime, git, prompt, skills, tools — the moved modules' companions
 export { makeDocker } from './runtime/Docker.js';

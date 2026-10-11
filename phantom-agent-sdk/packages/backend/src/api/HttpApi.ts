@@ -54,6 +54,7 @@ import { mediaRoutes } from './routes/media.js';
 import { identityRoutes } from './routes/identity.js';
 import { runnerRoutes } from './routes/runners.js';
 import { systemRoutes } from './routes/system.js';
+import { maintenanceRoutes } from './routes/maintenance.js';
 import { IDENTITY_PATH, IdentityError, type Caller } from '../identity/Identity.js';
 import { actAs, type Acting } from '../lib/acting.js';
 import { logger, errStr } from '../lib/log.js';
@@ -166,6 +167,7 @@ export class HttpApi {
       identityRoutes(api, backend);
       runnerRoutes(api, backend);
       systemRoutes(api, backend);
+      maintenanceRoutes(api, backend);
     }, { prefix: '/api' });
 
     // A browser app on another origin (identity.trustedOrigins) may call

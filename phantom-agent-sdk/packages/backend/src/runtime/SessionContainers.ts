@@ -14,8 +14,8 @@
 // No in-memory tracking: idle time comes from the workspace's lastUsedAt
 // (moved by every tool call and turn save on any of its sessions); running-
 // task status comes from background_tasks. Both survive a process restart, so
-// containers are never wiped at boot — they stay up and the normal idle reaper
-// handles them.
+// containers are never wiped at boot — they stay up and remove_old_containers
+// (maintenance/) handles them.
 import type { ProjectRow } from '../storage/schema.js';
 import type { Settings } from '../storage/Settings.js';
 import type { AgentDatabases } from '../storage/AgentDatabases.js';
@@ -73,7 +73,7 @@ export function buildContainerSpec(i: SpecInput): Record<string, unknown> {
     // restart stops every container, and Docker restarts only the ones that
     // carry this. Without it the container sits Exited and ensure() throws it
     // away — everything the agent installed and its own docker images with it.
-    // The reaper removes (never stops), so it never fights this. Verified live:
+    // Removal is a remove (never a stop), so it never fights this. Verified live:
     // after a daemon restart the container is Up with its writable layer intact.
     RestartPolicy: { Name: 'unless-stopped' },
     // null (the default) => omit the field entirely, so Docker applies no cap.
@@ -121,7 +121,7 @@ export interface ContainerOpts {
    *  so whatever the caller does next (a file write) happens after the
    *  listener is in place. Instant sync attaches its watcher here. */
   onStarted?: (workspaceId: string, project: ProjectRow | undefined) => Promise<void>;
-  /** The workspace's container was removed (idle reap, an explicit remove). */
+  /** The workspace's container was removed (remove_old_containers, an explicit remove). */
   onRemoved?: (workspaceId: string) => Promise<void>;
 }
 
@@ -233,19 +233,5 @@ export class SessionContainers {
     await (await this.hosts.of(workspaceId)).containerRemove(workspaceId);
     await this.opts.onRemoved?.(workspaceId)
       .catch((error) => log.warn({ workspace: workspaceId, err: errStr(error) }, 'onRemoved listener failed'));
-  }
-
-  /** Kill idle containers. `idleWorkspaces` answers from the workspace's lastUsedAt,
-   *  background_tasks and session locks — no in-memory state. */
-  async reap(idleMs: number, idleWorkspaces: (idleMs: number) => Promise<string[]>): Promise<void> {
-    const stale = await idleWorkspaces(idleMs);
-    for (const workspaceId of stale) {
-      try {
-        await this.remove(workspaceId);
-        log.info({ workspace: workspaceId }, 'idle workspace container removed');
-      } catch (error) {
-        log.warn({ workspace: workspaceId, err: errStr(error) }, 'idle workspace container could not be removed');
-      }
-    }
   }
 }

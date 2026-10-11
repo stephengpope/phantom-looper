@@ -26,7 +26,6 @@ export { Images } from './runtime/Images.js';
 export { SessionContainers } from './runtime/SessionContainers.js';
 export { Sandbox } from './runtime/Sandbox.js';
 export * as CheckoutPool from './runtime/CheckoutPool.js';
-export * as Disk from './runtime/Disk.js';
 export * as Skills from './runtime/Skills.js';
 export * as SystemSkills from './runtime/SystemSkills.js';
 export * as Web from './runtime/Web.js';

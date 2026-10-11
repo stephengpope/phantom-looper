@@ -40,7 +40,11 @@ import { Images } from './runtime/Images.js';
 import { SessionContainers } from './runtime/SessionContainers.js';
 import * as checkoutPool from './runtime/CheckoutPool.js';
 import { GitService, type GitHooks } from './git/GitService.js';
-import { idleBackupSweep, pressureSweep } from './runtime/Disk.js';
+import { Maintenance } from './maintenance/Maintenance.js';
+import { restockSpareClones } from './maintenance/restockSpareClones.js';
+import { backupIdleSessions } from './maintenance/backupIdleSessions.js';
+import { removeOldContainers } from './maintenance/removeOldContainers.js';
+import { freeDiskSpace } from './maintenance/freeDiskSpace.js';
 import { refreshWorkState } from './git/workRefresh.js';
 import { TelegramBotState } from './telegram/botState.js';
 import { TelegramSentMessages } from './telegram/sentMessages.js';
@@ -182,6 +186,8 @@ export class PhantomBackend {
   readonly sessionTitler: SessionTitler;
   /** The backend's git: manual ops, auto-push/pull, instant sync, the archive policy. */
   readonly git: GitService;
+  /** The upkeep jobs on their timers (maintenance/Maintenance.ts). */
+  readonly maintenance: Maintenance;
   readonly #httpApi: HttpApi;
   /** Where a client in this process reaches the API: plain HTTP on
    *  loopback. The backend's own agents are clients like any other. */
@@ -239,6 +245,13 @@ export class PhantomBackend {
       sessionEvents: this.sessionEvents, boardEvents: this.boardEvents, settingsEvents: this.settingsEvents,
       sessionNotes: this.sessionNotes, sessionContainers: this.sessionContainers,
     }, config.git ?? {});
+    this.maintenance = new Maintenance(this.settings, [
+      restockSpareClones({ projects: this.projects, settings: this.settings, runners: this.runners }),
+      backupIdleSessions({ projects: this.projects, sessions: this.sessions, gitSync: this.git.sync }),
+      removeOldContainers({ settings: this.settings, sessionContainers: this.sessionContainers, idleWorkspaces: (idleMs) => this.idleContainerWorkspaces(idleMs) }),
+      freeDiskSpace({ settings: this.settings, projects: this.projects, sessions: this.sessions, runners: this.runners,
+        sessionContainers: this.sessionContainers, gitSync: this.git.sync, busy: (ids) => this.busyWorkspaces(ids) }),
+    ]);
     this.#httpApi = new HttpApi(this, this.env.serviceRoleKey, config.routes);
   }
 
@@ -354,7 +367,7 @@ export class PhantomBackend {
     return this.sessions.workspacesHeld(ids);
   }
 
-  /** Workspaces with a running container not touched for `idleMs` and not busy — what the idle reaper takes. */
+  /** Workspaces with a running container not touched for `idleMs` and not busy — what remove_old_containers takes. */
   async idleContainerWorkspaces(idleMs: number): Promise<string[]> {
     const active = await this.sessionContainers.activeWorkspaces();
     const idle = await this.workspaces.listIdle(active, idleMs);
@@ -362,31 +375,9 @@ export class PhantomBackend {
     return idle.filter((id) => !busy.has(id));
   }
 
-  /** Begin the backend's own loops: the maintenance loop (pool stock, the
-   *  idle backup sweep, idle reaping, the disk-pressure sweep) and the
-   *  work-state refresh. */
+  /** Begin the backend's own loops: the work-state refresh (the upkeep
+   *  jobs are the scheduler's, `maintenance`). */
   #startLoops(): void {
-    this.#loops.push(this.#loop(async () => {
-      // The warm checkouts: the facts resolved once here, the tick run on
-      // every box that holds a volume — this server's (awaited) and each
-      // online runner's (a job; a slow clone there never holds this loop,
-      // and the runner drops a tick under a running one). A runner is
-      // stocked only for projects that have had a workspace on it.
-      const pool = await checkoutPool.poolFacts(this.projects, this.settings);
-      if (pool) {
-        for (const runner of this.runners.onlineRunners()) {
-          const served = await this.runners.projectsOn(runner.id).catch(() => new Set<string>());
-          const mine = pool.filter((project) => served.has(project.id));
-          if (mine.length) void runner.poolTick(mine).catch((error) => log.warn({ runner: runner.name, err: errStr(error) }, 'pool tick on runner failed'));
-        }
-      }
-      await idleBackupSweep(this.projects, this.sessions, this.git.sync).catch((error) => log.error({ err: errStr(error) }, 'idle backup sweep threw'));
-      const idleMs = await this.settings.resolve<number>('container_idle_ms').catch(() => 30 * 60_000);
-      await this.sessionContainers.reap(Number(idleMs), (idleMs) => this.idleContainerWorkspaces(idleMs)).catch((error) => log.error({ err: errStr(error) }, 'container reap threw'));
-      await pressureSweep(this.settings, this.projects, this.sessions, this.runners, this.sessionContainers, this.git.sync, (ids) => this.busyWorkspaces(ids))
-        .catch((error) => log.error({ err: errStr(error) }, 'pressure sweep threw'));
-      return Number(await this.settings.resolve<number>('maintenance_interval_ms').catch(() => 60_000));
-    }));
     // Database console lifecycle: stop CloudBeaver if the setting is off,
     // start it when toggled on. The boot reconciliation catches the container
     // compose started; the settings listener handles ongoing changes.
@@ -427,6 +418,7 @@ export class PhantomBackend {
     await this.runners.local.retireOldContainers().catch((error) => log.warn({ err: errStr(error) }, 'could not retire old-named containers'));
     this.git.start();
     this.#startLoops();
+    this.maintenance.start();
     if (this.config.crons) { this.#cronScheduler = new CronScheduler(this, this.config.crons.agent); this.#cronScheduler.start(); }
     await this.config.onStart?.(this);
     log.info({ port: this.env.port, version: this.version }, 'backend up');
@@ -443,6 +435,7 @@ export class PhantomBackend {
     await this.config.onStop?.(this);
     await this.git.stop();
     await this.#httpApi.close();
+    this.maintenance.stop();
     this.runners.stop();
     this.runners.local.stop();
     await this.database.close();
