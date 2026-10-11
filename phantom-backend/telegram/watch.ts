@@ -21,7 +21,7 @@
 // the turn-end never come. The hold's release always does — turn-ended is
 // retried until it lands — so a bubble still open when the hold lets go is
 // finished from the record: the reply is the last assistant text there.
-import type { PhantomBackend, SessionEvent, TelegramApi } from '@phantom-agent-sdk/backend';
+import type { PhantomBackend, SessionEvent, TelegramApi, ReplyBubble } from '@phantom-agent-sdk/backend';
 import { logger, errStr } from '@phantom-agent-sdk/backend';
 import { parseLines, conversationFrom } from '@phantom-agent-sdk/client/transcript';
 import { CLIENT_ID } from './assistant.js';
@@ -31,12 +31,10 @@ const log = logger('telegram-watch');
 export type TelegramStream = 'on' | 'all' | 'off';
 export const STREAM_MODES: readonly TelegramStream[] = ['on', 'all', 'off'];
 
-interface Bubble { appendPart(part: Record<string, unknown>): void; finish(text: string): Promise<string>; discard(): Promise<void> }
-
 export class SessionWatch {
   #off: (() => void) | null = null;
   #chain: Promise<void> = Promise.resolve();
-  #bubble: Bubble | null = null;
+  #bubble: ReplyBubble | null = null;
   #typing: ReturnType<typeof startTyping> | null = null;
   #text = '';
   /** The turn in progress is nobody's business here (stream off, not ours). */
@@ -97,7 +95,7 @@ export class SessionWatch {
         }
         const part = event.part as { type?: string; text?: string };
         if (part.type === 'text-delta' && typeof part.text === 'string') this.#text += part.text;
-        this.#bubble!.appendPart(event.part);
+        this.#bubble!.part(event.part);
         return;
       }
       case 'transcript': {

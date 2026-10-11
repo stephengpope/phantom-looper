@@ -80,11 +80,10 @@ export { SKILLS_LIST, SECRETS_LIST, GITHUB_TOKEN, AGENT_DATABASE, AGENT_DATABASE
 
 // telegram plumbing, notifications, the queue
 export { TelegramApi, titled, ALLOWED_UPDATES, MAX_OUTBOUND_BYTES } from './telegram/TelegramApi.js';
-export { collectFiles, type TelegramBotDeps, type TelegramCommand, type WebhookStatus, type MessageHandler, type ReactionHandler, type ButtonHandler, type ReplyBubble } from './telegram/TelegramBot.js';
+export { collectFiles, type TelegramBotDeps, type TelegramCommand, type WebhookStatus, type MessageHandler, type ReactionHandler, type ButtonHandler } from './telegram/TelegramBot.js';
 export { toTelegram, splitFormatted, truncateFormatted, clampEntities, type Formatted, type Entity as TelegramEntity } from './telegram/entities.js';
 export { collectDeliverables, extractMedia, extractBarePaths, maskJsonStringMedia, maskProtectedSpans, validateDeliveryPath, deliveryType, MEDIA_DELIVERY_EXTS, type Deliverable, type Media, type SendType } from './telegram/mediaTags.js';
-export { makeTelegramSink, type TelegramSink, type DeliverConfig } from './telegram/sink.js';
-export { startWaitingBubble, type WaitingBubble } from './telegram/bubble.js';
+export { ReplyBubble, type ReplyBubbleOptions, type Delivery } from './telegram/ReplyBubble.js';
 export { writeAttachment, composeMessage, classify, safeName, sniffImageMime, MAX_INBOUND_BYTES, type StoredAttachment, type AttachmentType } from './telegram/TelegramAttachments.js';
 export { transcribeVoice, speakVoice, splitForSpeech, SPEAK_MAX_CHARS, type Transcription } from './telegram/TelegramVoice.js';
 export { connectFetch, isConnectFailure, CONNECT_RETRIES, CONNECT_TIMEOUT_MS, KEEP_ALIVE_MS } from './telegram/connect.js';

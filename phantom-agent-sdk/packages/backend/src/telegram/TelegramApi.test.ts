@@ -7,9 +7,9 @@ import { TelegramApi } from './TelegramApi.js';
 
 test('a call with no answer fails at the deadline', async () => {
   const realFetch = globalThis.fetch;
-  globalThis.fetch = ((_input: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
-    init?.signal?.addEventListener('abort', () => reject(init.signal!.reason as Error));
-  })) as typeof fetch;
+  globalThis.fetch = (_input: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(new Error('aborted at the deadline')));
+  });
   // AbortSignal.timeout's timer does not keep the loop alive on its own; the
   // server always has other work running, this test holds the loop open.
   const keep = setTimeout(() => undefined, 5_000);

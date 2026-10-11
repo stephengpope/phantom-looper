@@ -16,8 +16,7 @@
 import { TELEGRAM_WEBHOOK_PATH } from './webhookPath.js';
 import crypto from 'node:crypto';
 import { TelegramApi, ALLOWED_UPDATES } from './TelegramApi.js';
-import { makeTelegramSink, type DeliverConfig, type TelegramSink } from './sink.js';
-import { startWaitingBubble } from './bubble.js';
+import { ReplyBubble, type Delivery } from './ReplyBubble.js';
 import { transcribeVoice, speakVoice, splitForSpeech, SPEAK_MAX_CHARS, type Transcription } from './TelegramVoice.js';
 import { writeAttachment, composeMessage, MAX_INBOUND_BYTES, type StoredAttachment } from './TelegramAttachments.js';
 import { Approvals, type Ask } from './TelegramApprovals.js';
@@ -95,15 +94,6 @@ export type MessageHandler = (chatId: number, messages: any[]) => Promise<void>;
 export type ReactionHandler = (chatId: number, reaction: any) => Promise<void>;
 /** A button tap the bot did not answer itself (approvals are). */
 export type ButtonHandler = (chatId: number, query: { id: string; data: string | undefined }, api: TelegramApi) => Promise<void>;
-
-/** A reply streamed into one chat as it is written. */
-export interface ReplyBubble {
-  appendPart(part: Record<string, unknown>): void;
-  /** The reply is complete; answers what was said (in voice mode the text was withheld, so it comes back here to be spoken). */
-  finish(finalText: string): Promise<string>;
-  /** Tear the reply down after a turn that threw; resolves when the bubble is cleaned up. */
-  discard(): Promise<void>;
-}
 
 export class TelegramBot {
   readonly #approvals = new Approvals();
@@ -414,7 +404,7 @@ export class TelegramBot {
   /** File delivery for a session's reply: the agent's /workspace/... paths
    *  located on the workspace's host, confined to the workspace (a link
    *  pointing out is not a file), read from there. */
-  deliveryFor(sessionId: string): DeliverConfig {
+  deliveryFor(sessionId: string): Delivery {
     const files = async () => (await this.deps.hosts.of(sessionId)).files(sessionId);
     return {
       locate: async (containerPath) => {
@@ -431,16 +421,19 @@ export class TelegramBot {
     return String(await this.deps.settings.resolve('telegram_reply_mode')) === 'voice';
   }
 
-  /** A reply bubble for one chat: a "…" placeholder, the text edited in
-   *  place as it streams, files the agent named delivered at the end. */
-  async startReplyBubble(api: TelegramApi, chatId: number, sessionId: string | null, options: { bubble?: boolean } = {}): Promise<ReplyBubble> {
-    const sink: TelegramSink = makeTelegramSink(api, chatId, sessionId ? this.deliveryFor(sessionId) : undefined,
-      { voiceOnly: await this.voiceOnly(), ...(options.bubble === false ? { bubble: false } : {}) });
-    return { appendPart: (part) => sink.part(part), finish: (text) => sink.done(text), discard: () => sink.dispose() };
+  /** A reply bubble for one chat (ReplyBubble.ts), set up the way this
+   *  install replies: files delivered from the session's workspace, the
+   *  text withheld when the reply mode is voice. */
+  async startReplyBubble(api: TelegramApi, chatId: number, sessionId: string | null, options: { placeholder?: boolean } = {}): Promise<ReplyBubble> {
+    return new ReplyBubble(api, chatId, {
+      delivery: sessionId ? this.deliveryFor(sessionId) : undefined,
+      voiceOnly: await this.voiceOnly(),
+      placeholder: options.placeholder,
+    });
   }
 
   /** One deliberate message from a session (the send_message tool), through
-   *  the same sink a reply takes so it arrives exactly as a reply would, and
+   *  the same bubble a reply takes so it arrives exactly as a reply would, and
    *  recorded against the session so a reply to it enters that session.
    *  Throws with the reason when the bot is off or unconfigured. */
   async sendMessageForSession(sessionId: string, text: string): Promise<void> {
@@ -451,7 +444,7 @@ export class TelegramBot {
     const token = await this.token();
     if (!token) throw new Error('no telegram_bot_token stored (/keys)');
     const api = this.clientForChat(token, chatId, () => sessionId);
-    const bubble = await this.startReplyBubble(api, chatId, sessionId, { bubble: false });
+    const bubble = await this.startReplyBubble(api, chatId, sessionId, { placeholder: false });
     const said = await bubble.finish(text);
     await this.speakText(api, chatId, said);
   }
@@ -464,7 +457,7 @@ export class TelegramBot {
 
   /** Speak the reply when the mode asks. Long replies are split so audio
    *  starts in under a second — two synthesis requests fly in parallel,
-   *  sent in order, dots between pieces. In `voice` mode the sink withheld
+   *  sent in order, dots between pieces. In `voice` mode the bubble withheld
    *  the text, so a failed synthesis falls back to sending it. `typing` is
    *  the turn's indicator loop, swapped to record_voice while synthesis runs. */
   async speakText(api: TelegramApi, chatId: number, text?: string, typing?: { set(a: string): void }): Promise<void> {
@@ -495,16 +488,18 @@ export class TelegramBot {
     startJob(0); startJob(1);
     let sent = 0;
     for (let i = 0; i < chunks.length; i++) {
-      const bubble = i === 0 ? null : startWaitingBubble(api, chatId);
+      // Dots while the next piece is synthesized — a reply bubble nothing
+      // is ever written into.
+      const waiting = i === 0 ? null : new ReplyBubble(api, chatId);
       try {
         const audio = await jobs[i]!;
         startJob(i + 2);
         if (!audio) break;
-        await bubble?.remove();
+        await waiting?.discard();
         await api.sendVoiceBytes(chatId, audio);
         sent++;
       } catch {
-        await bubble?.remove();
+        await waiting?.discard();
         break;
       }
     }
