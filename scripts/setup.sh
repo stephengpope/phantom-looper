@@ -33,6 +33,12 @@ BACKEND_HTTP_PORT=$HTTP_PORT
 BACKEND_ADDRESS=localhost
 BACKEND_TLS=internal
 COMPOSE_PROFILES=https
+# A dev box is one box: the api runs sessions and turns itself. The runner
+# services stay at zero — from inside Docker they could not reach Caddy at
+# localhost, and a checkout runs the cli's own turns in the cli.
+RUN_SESSION_CONTAINERS=1
+SESSION_RUNNERS=0
+CLIENT_RUNNERS=0
 ENV
   )
   echo "wrote .env (api :$PORT, https :$HTTPS_PORT)"
