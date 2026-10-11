@@ -72,7 +72,14 @@ export class TelegramApi {
     private token: string,
     private onSent?: (messageId: number, text: string) => void,
     private onDeleted?: (messageId: number) => void,
+    private readonly opts: { timeoutMs?: number; uploadTimeoutMs?: number } = {},
   ) {}
+
+  /** A call that gets no answer in this long is on a dead socket: it fails,
+   *  and whatever chained behind it (a bubble's edits) moves on. Uploads get
+   *  longer — a voice note or a file is bytes on the wire. */
+  static readonly TIMEOUT_MS = 30_000;
+  static readonly UPLOAD_TIMEOUT_MS = 120_000;
 
   async call(method: string, body: Record<string, unknown> = {}): Promise<any> {
     const url = `${TELEGRAM_API_BASE}/bot${this.token}/${method}`;
@@ -81,6 +88,7 @@ export class TelegramApi {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(this.opts.timeoutMs ?? TelegramApi.TIMEOUT_MS),
       });
       const json = await readEnvelope(res);
       if (res.ok && json.ok) return json.result;
@@ -220,7 +228,8 @@ export class TelegramApi {
       form.set('reply_parameters',
         JSON.stringify({ message_id: opts.replyToMessageId, allow_sending_without_reply: true }));
     }
-    const res = await fetch(`${TELEGRAM_API_BASE}/bot${this.token}/${method}`, { method: 'POST', body: form });
+    const res = await fetch(`${TELEGRAM_API_BASE}/bot${this.token}/${method}`, { method: 'POST', body: form,
+      signal: AbortSignal.timeout(this.opts.uploadTimeoutMs ?? TelegramApi.UPLOAD_TIMEOUT_MS) });
     const json = await readEnvelope(res);
     if (!(res.ok && json.ok)) throw new Error(`telegram ${method} failed: ${json.description || res.status}`);
     return json.result;
