@@ -60,7 +60,6 @@ services:
       # The superuser's: boot creates the `migrator` and `backend` roles with
       # it and hangs up; the process runs as `backend` (storage/Database.ts).
       DATABASE_URL: postgres://${POSTGRES_USER:-phantom}:${POSTGRES_PASSWORD:?}@postgres:5432/phantom
-      WORKSPACE_ROOT_PATH: /workspaces
       PORT: 8080
       # The service role key: the server's own credential, ph_service_role_ + secret.
       SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-ph_service_role_${API_KEY:-}}
@@ -78,24 +77,6 @@ services:
       # Workspace containers are created through the socket proxy below — the
       # API never holds the socket and runs non-root.
       DOCKER_HOST: tcp://docker-proxy:2375
-      # The named volume, by NAME: workspace containers mount per-session
-      # subpaths of it. dockerd resolves mounts host-side, so an API-internal
-      # path would come up empty.
-      WORKSPACE_VOLUME: phantom-looper-workspaces
-      # The agents' network, made by the API when missing: internet out,
-      # inter-container traffic off — an agent reaches nothing on this server,
-      # not another agent, not the stack. The interface carries the same name,
-      # for the host firewall's metadata block (scripts/install.sh).
-      AGENT_NETWORK: phantom-agents
-      # The database server's container (compose: <project>-<service>-1). With
-      # `agent_database_shared` on, a workspace container gets a private
-      # internal network holding only it and this container, so its code
-      # reaches its database and nothing else of the stack.
-      AGENT_DATABASE_CONTAINER: phantom-backend-postgres-1
-      # The disk-quota helper (below, the `disk-quota` profile): what holds an
-      # agent's checkout to `container_disk_gb`. Off by default; without it
-      # running, the setting is refused rather than ignored.
-      DISK_QUOTA_URL: http://disk-quota:7000
       # The database console (CloudBeaver). The API proxies /db to it and
       # manages its container lifecycle based on the db_ui_enabled setting.
       DB_UI_URL: http://cloudbeaver:8978
@@ -104,7 +85,7 @@ services:
       # sidecar (shared volume; the sidecar polls it).
       UPDATE_TRIGGER_DIR: /trigger
       # The api's OWN image name. A container cannot name its own image from
-      # inside; handed in here, the disk cleanup can prune its old tags the
+      # inside; handed in here, the image cleanup can prune its old tags the
       # same way it prunes the session image's.
       API_IMAGE: ${BACKEND_API_IMAGE:-${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}}
       # The bot's public address — the Telegram webhook registers at
@@ -115,10 +96,6 @@ services:
       # (ngrok). Empty: the address above.
       TELEGRAM_WEBHOOK_ADDRESS: ${TELEGRAM_WEBHOOK_ADDRESS:-}
     volumes:
-      # Named volume, not a host bind: one filesystem under one kernel, so the
-      # pool's atomic rename holds and inotify propagates between containers.
-      # Workspace containers mount per-session subpaths of the same volume.
-      - phantom-looper-workspaces:/workspaces
       - updater-trigger:/trigger
     # NOT a public surface: localhost only. Public traffic goes through caddy
     # (the `https` profile), which reaches this container as api:8080.
@@ -179,7 +156,7 @@ services:
     command: ["node", "phantom-agent-sdk/packages/backend/dist/runtime/diskQuotaHelper.js"]
     environment:
       QUOTA_MOUNT: /var/lib/docker
-      QUOTA_ROOT: /var/lib/docker/volumes/phantom-looper-workspaces/_data
+      QUOTA_ROOT: /var/lib/docker/volumes/phantom-runner-workspaces/_data
     volumes:
       - /var/lib/docker:/var/lib/docker
     healthcheck:
@@ -351,8 +328,6 @@ networks:
 
 volumes:
   pg-data:
-  phantom-looper-workspaces:
-    name: phantom-looper-workspaces   # fixed name — the API references it by name for subpath mounts
   phantom-runner-workspaces:
     name: phantom-runner-workspaces   # the session runner's, by name, for the same reason
   cloudbeaver-data:

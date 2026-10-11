@@ -9,6 +9,7 @@
 import { API_IMAGE, APP_VERSION } from '../lib/env.js';
 import type { Settings } from '../storage/Settings.js';
 import type { Runners } from '../host/Runners.js';
+import type { Images } from '../runtime/Images.js';
 import type { MaintenanceJob } from './Maintenance.js';
 import { logger, errStr } from '../lib/log.js';
 
@@ -26,20 +27,23 @@ export async function currentImages(settings: Settings): Promise<string[]> {
   return [String(await settings.resolve('container_image')), API_IMAGE_CURRENT];
 }
 
-export function removeUnusedImages(deps: { settings: Settings; runners: Runners }): MaintenanceJob {
+export function removeUnusedImages(deps: { settings: Settings; runners: Runners; images: Images }): MaintenanceJob {
   return {
     name: 'remove_unused_images',
     description: 'Deletes release images older than the ones in use that no container uses any more, on this server and every online session runner.',
     where: 'api and session runners',
     async run() {
       const currents = await currentImages(deps.settings);
-      const boxes = [deps.runners.local, ...deps.runners.onlineRunners()];
-      let removed = 0;
-      for (const box of boxes) {
+      // This server's own daemon: its api image, and — where a session runner
+      // shares the daemon — the session image the update pulled here.
+      let removed = await deps.images.removeOlderThan(currents)
+        .catch((error) => { log.warn({ box: 'api', err: errStr(error) }, 'image cleanup failed'); return 0; });
+      const runners = deps.runners.onlineRunners();
+      for (const box of runners) {
         removed += await box.removeOldImages(currents)
           .catch((error) => { log.warn({ box: box.name, err: errStr(error) }, 'image cleanup failed'); return 0; });
       }
-      return { boxes: boxes.length, removed };
+      return { boxes: runners.length + 1, removed };
     },
   };
 }

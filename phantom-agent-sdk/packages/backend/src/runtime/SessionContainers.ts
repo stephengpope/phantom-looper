@@ -8,8 +8,8 @@
 // This object DECIDES: which image, which limits, which credentials, which
 // database — read from the settings in the project's scope — and hands the
 // whole plan to the host the workspace is placed on (runtime/WorkspaceHost.ts),
-// which creates and starts the container. The backend's own runner is this process;
-// a session runner is a box of its own. The docker calls live there.
+// which creates and starts the container: a session runner, a box of its
+// own. The docker calls live there.
 //
 // No in-memory tracking: idle time comes from the workspace's lastUsedAt
 // (moved by every tool call and turn save on any of its sessions); running-
@@ -226,8 +226,8 @@ export class SessionContainers {
     return { env: [`AGENT_DATABASE_URL=${url}`], host: new URL(url).hostname };
   }
 
-  /** Null when the backend's own runner can hold a container to `container_disk_gb`. */
-  diskSupport(): Promise<string | null> { return this.hosts.local.diskSupport(); }
+  /** Null when an online session runner can hold a container to `container_disk_gb`. */
+  async diskSupport(): Promise<string | null> { return this.hosts.diskSupport(); }
 
   /** Remove the workspace's container on its host. None there is fine — that
    *  is the goal; any other failure throws, so no caller logs a removal that

@@ -11,7 +11,6 @@
 // else. The members are the objects every route, tool and engine reads.
 import { readEnv, APP_VERSION, type Env } from './lib/env.js';
 import { logger, errStr } from './lib/log.js';
-import { makePaths, type Paths } from './lib/paths.js';
 import { Database, SDK_MIGRATIONS } from './storage/Database.js';
 import { Settings } from './storage/Settings.js';
 import { sdkSettings, agentTypeSettings } from './storage/sdkSettings.js';
@@ -34,11 +33,9 @@ import { BoardEvents } from './agents/BoardEvents.js';
 import { SettingsEvents } from './agents/SettingsEvents.js';
 import { ForegroundCommands } from './agents/ForegroundCommands.js';
 import { makeDocker } from './runtime/Docker.js';
-import { LocalHost } from './runtime/LocalHost.js';
 import { Runners } from './host/Runners.js';
 import { Images } from './runtime/Images.js';
 import { SessionContainers } from './runtime/SessionContainers.js';
-import * as checkoutPool from './runtime/CheckoutPool.js';
 import { GitService, type GitHooks } from './git/GitService.js';
 import { Maintenance } from './maintenance/Maintenance.js';
 import { restockSpareClones } from './maintenance/restockSpareClones.js';
@@ -147,7 +144,6 @@ export class PhantomBackend {
   readonly env: Env;
   /** This backend's release (`vX.Y.Z`), or 'dev' for a checkout. */
   readonly version = APP_VERSION;
-  readonly paths: Paths;
 
   // ── storage ──────────────────────────────────────────────────────────
   readonly database: Database;
@@ -220,14 +216,14 @@ export class PhantomBackend {
   #loops: Promise<void>[] = [];
 
   private constructor(readonly config: PhantomBackendConfig, built: Built) {
-    this.env = built.env; this.paths = built.paths; this.database = built.database; this.settings = built.settings;
+    this.env = built.env; this.database = built.database; this.settings = built.settings;
     this.projects = built.projects; this.workspaces = built.workspaces; this.sessions = built.sessions; this.cards = built.cards;
     this.crons = built.crons; this.presets = built.presets; this.backgroundTasks = built.backgroundTasks; this.tokenLog = built.tokenLog;
     this.agentDatabases = built.agentDatabases; this.agentTypes = built.agentTypes; this.agentConfig = built.agentConfig;
     this.modelCatalog = built.modelCatalog; this.sessionNotes = built.sessionNotes; this.sessionEvents = built.sessionEvents;
     this.boardEvents = built.boardEvents; this.settingsEvents = built.settingsEvents; this.foregroundCommands = built.foregroundCommands;
     this.docker = built.docker; this.images = built.images; this.sessionContainers = built.sessionContainers;
-    this.deployment = new Deployment(built.paths, built.tokenLog, built.docker, built.images, config.deployment);
+    this.deployment = new Deployment(built.tokenLog, built.docker, built.images, config.deployment);
     this.runners = built.runners; this.telegramBotState = built.telegramBotState;
     this.toolCalls = new ToolCalls(this.sessions, this.sessionEvents);
     this.turns = new Turns(this.sessions, this.runners, this.settings, this.sessionEvents, this.toolCalls);
@@ -250,7 +246,7 @@ export class PhantomBackend {
       restockSpareClones({ projects: this.projects, settings: this.settings, runners: this.runners }),
       backupIdleSessions({ projects: this.projects, sessions: this.sessions, gitSync: this.git.sync }),
       removeOldContainers({ settings: this.settings, workspaces: this.workspaces, projects: this.projects, sessionContainers: this.sessionContainers, busy: (ids) => this.busyWorkspaces(ids) }),
-      removeUnusedImages({ settings: this.settings, runners: this.runners }),
+      removeUnusedImages({ settings: this.settings, runners: this.runners, images: this.images }),
       freeDiskSpace({ settings: this.settings, projects: this.projects, sessions: this.sessions, runners: this.runners,
         sessionContainers: this.sessionContainers, gitSync: this.git.sync, busy: (ids) => this.busyWorkspaces(ids) }),
     ]);
@@ -274,8 +270,6 @@ export class PhantomBackend {
     const database = await Database.open(env.databaseUrl, env.encryptionKey);
     await database.migrate(SDK_MIGRATIONS);
     if (config.migrations) await database.migrate(config.migrations);
-    const paths = makePaths(env.workspaceRoot);
-    await checkoutPool.bootCleanup(paths);
 
     const boardEvents = new BoardEvents();
     const sessionEvents = new SessionEvents();
@@ -312,11 +306,7 @@ export class PhantomBackend {
     // workspace lands here: every one goes to a session runner (the
     // `session-runner` service beside the api, or any box running runners/).
     // This box keeps serving, reaping and sweeping only what it already holds.
-    const localHost = new LocalHost(docker, images, paths, {
-      volume: process.env.WORKSPACE_VOLUME, network: process.env.AGENT_NETWORK, databaseContainer: process.env.AGENT_DATABASE_CONTAINER,
-      diskQuota: process.env.DISK_QUOTA_URL || undefined, apiImage: process.env.API_IMAGE,
-    });
-    const runners = new Runners(database.system, localHost, { settings });
+    const runners = new Runners(database.system, { settings });
     await runners.load();
     const workspaces = new Workspaces(database.drizzle, runners, settings, sessionEvents);
     const cards = new Cards(database.drizzle, projects, boardEvents, config.cardFields);
@@ -349,11 +339,11 @@ export class PhantomBackend {
       onRemoved: (workspaceId) => backend.git.instantSync.unwatchWorkspace(workspaceId),
     });
 
-    // A disk limit is only accepted where this server can enforce it.
+    // A disk limit is only accepted where a session runner can enforce it.
     settings.requireSupport('container_disk_gb', () => sessionContainers.diskSupport());
 
     const backend: PhantomBackend = new PhantomBackend(config, {
-      media, env, paths, database, settings, projects, workspaces, sessions, cards, crons, presets, backgroundTasks, tokenLog, agentDatabases,
+      media, env, database, settings, projects, workspaces, sessions, cards, crons, presets, backgroundTasks, tokenLog, agentDatabases,
       agentTypes, agentConfig, modelCatalog, sessionNotes, sessionEvents, boardEvents, settingsEvents, foregroundCommands,
       docker, images, sessionContainers, runners, telegramBotState, telegramSentMessages, telegramHandledUpdates,
     });
@@ -402,14 +392,7 @@ export class PhantomBackend {
    *  they start — then the git service and the loops begin, then
    *  `config.onStart` (user space's engines). */
   async start(): Promise<void> {
-    // A disk limit already set (or fixed) that this server cannot enforce:
-    // stop here, by name — every agent would otherwise fail to start.
-    if (await this.settings.resolve('container_disk_gb')) {
-      const reason = await this.settings.unsupported('container_disk_gb');
-      if (reason) throw new Error(`container_disk_gb is set but cannot be enforced on this server: ${reason}`);
-    }
     await this.#httpApi.listen(this.env.port);
-    await this.runners.local.retireOldContainers().catch((error) => log.warn({ err: errStr(error) }, 'could not retire old-named containers'));
     this.git.start();
     this.#startLoops();
     this.maintenance.start();
@@ -431,14 +414,13 @@ export class PhantomBackend {
     await this.#httpApi.close();
     this.maintenance.stop();
     this.runners.stop();
-    this.runners.local.stop();
     await this.database.close();
   }
 }
 
 interface Built {
   media: Media;
-  env: Env; paths: Paths; database: Database; settings: Settings; projects: Projects; workspaces: Workspaces; sessions: Sessions;
+  env: Env; database: Database; settings: Settings; projects: Projects; workspaces: Workspaces; sessions: Sessions;
   cards: Cards; crons: Crons; presets: Presets; backgroundTasks: BackgroundTasks; tokenLog: TokenLog; agentDatabases: AgentDatabases;
   agentTypes: AgentTypes; agentConfig: AgentConfig; modelCatalog: ModelCatalog; sessionNotes: SessionNotes;
   sessionEvents: SessionEvents; boardEvents: BoardEvents; settingsEvents: SettingsEvents; foregroundCommands: ForegroundCommands;

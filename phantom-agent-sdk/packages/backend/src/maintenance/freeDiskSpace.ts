@@ -157,14 +157,11 @@ export async function diskCleanup(deps: CleanupDeps): Promise<number> {
   return deletedCount;
 }
 
-/** Disk cleanup against the real system, one box at a time: this server's
- *  disk, then every online session runner's. A disk is freed only by what
- *  is on it: each box is measured itself, prunes its own old images, and
- *  gives up only the workspaces placed on it. The decisions — which
- *  sessions, idle, busy, landed, backed up — are the API's; the deletion
- *  and the measuring route to the box through its host. This server's box
- *  is measured and pruned whether or not it runs containers: every update
- *  pulls an image here. */
+/** Disk cleanup against the real system, one session runner at a time. A
+ *  disk is freed only by what is on it: each box is measured itself, prunes
+ *  its own old images, and gives up only the workspaces placed on it. The
+ *  decisions — which sessions, idle, busy, landed, backed up — are the
+ *  API's; the deletion and the measuring route to the box through its host. */
 export function freeDiskSpace(deps: {
   settings: Settings; projects: Projects; sessions: Sessions; runners: Runners;
   sessionContainers: SessionContainers; gitSync: GitSync;
@@ -175,17 +172,12 @@ export function freeDiskSpace(deps: {
   return {
     name: 'free_disk_space',
     description: `When a box's disk is over disk_cleanup_percent or under ${MIN_FREE_GB} GB free: frees unused release images, then backs up and deletes idle, merged sessions oldest first until it is not.`,
-    where: 'api and session runners',
+    where: 'session runners',
     async run() {
       const currents = await currentImages(settings);
       const pct = Number(await settings.resolve('disk_cleanup_percent'));
       const idleMs = Number(await settings.resolve('container_idle_ms'));
-      // This server's box too, whatever it places: it may still hold workspaces
-      // from before runners, and every update pulls an image here.
-      const boxes: Array<{ host: WorkspaceHost; hostId: string | null }> = [
-        { host: runners.local, hostId: null },
-        ...runners.onlineRunners().map((host) => ({ host, hostId: host.id })),
-      ];
+      const boxes: Array<{ host: WorkspaceHost; hostId: string | null }> = runners.onlineRunners().map((host) => ({ host, hostId: host.id }));
       let deleted = 0;
       for (const box of boxes) {
         const onBox = async (session: SessionRow) => (await runners.hostIdOf(session.id)) === box.hostId;

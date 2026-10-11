@@ -174,7 +174,6 @@ export class Runner {
     }
     if (this.opts.sessions) {
       await checkoutPool.bootCleanup(this.opts.paths);
-      await this.#local.retireOldContainers();
     }
     const idFile = path.join(this.opts.paths.root, 'host.json');
     const persisted: { id?: string } = await fs.readFile(idFile, 'utf8').then((text) => JSON.parse(text) as { id?: string }, () => ({}));

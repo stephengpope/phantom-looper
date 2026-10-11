@@ -7,7 +7,6 @@ export interface Env {
   /** The bootstrap superuser's. Boot uses it once (the roles), the console
    *  connects as it; the running backend is on its own role (Database). */
   databaseUrl: string;
-  workspaceRoot: string;
   port: number;
   /** The service role key: the server's own credential, which bypasses
    *  every fence. `ph_service_role_` + the secret (SERVICE_ROLE_KEY). */
@@ -59,7 +58,6 @@ export function readEnv(source: NodeJS.ProcessEnv = process.env): Env {
   const address = source.BACKEND_ADDRESS?.trim();
   return {
     databaseUrl: need('DATABASE_URL'),
-    workspaceRoot: need('WORKSPACE_ROOT_PATH'),
     port,
     serviceRoleKey,
     encryptionKey,

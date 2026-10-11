@@ -15,7 +15,6 @@ import os from 'node:os';
 import { statfsSync } from 'node:fs';
 import { PassThrough, Readable } from 'node:stream';
 import type Docker from 'dockerode';
-import type { Paths } from '../lib/paths.js';
 import type { Images } from '../runtime/Images.js';
 import type { TokenLog } from '../storage/TokenLog.js';
 import { formatTokenReport, reportWindows } from '../storage/tokenReport.js';
@@ -58,7 +57,6 @@ export interface LogsQuery { service?: string; tail?: number; since?: string; gr
 
 export class Deployment {
   constructor(
-    private readonly paths: Paths,
     private readonly tokenLog: TokenLog,
     /** Absent when this server has no docker access: logs and restarts refuse. */
     private readonly docker?: Docker,
@@ -172,7 +170,7 @@ export class Deployment {
     const cpuPct = all > 0 ? Math.round((1 - idle / all) * 100) : 0;
     const load = os.loadavg().map((average) => average.toFixed(2)).join(' ');
     const totalMem = os.totalmem(), freeMem = os.freemem();
-    const disk = statfsSync(this.paths.root);
+    const disk = statfsSync('/');
     const diskTotal = disk.blocks * disk.bsize, diskAvail = disk.bavail * disk.bsize;
     return { text: [
       `${cpuPct}% busy · ${a.length} cores`,

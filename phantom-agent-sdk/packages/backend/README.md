@@ -19,8 +19,8 @@ const backend = await PhantomBackend.create(config);   // env → database → m
 await backend.start();                                 // the API listens; onStart ran
 ```
 
-Boot-and-connect values come from the environment (`DATABASE_URL`,
-`WORKSPACE_ROOT_PATH`, `PORT`, `SERVICE_ROLE_KEY`, `ENCRYPTION_KEY`, `DOCKER_HOST`);
+Boot-and-connect values come from the environment (`DATABASE_URL`, `PORT`,
+`SERVICE_ROLE_KEY`, `ENCRYPTION_KEY`, `DOCKER_HOST`);
 every behavioural knob is a setting, read over the API.
 
 **Database roles.** `DATABASE_URL` is the bootstrap superuser's; boot uses it
