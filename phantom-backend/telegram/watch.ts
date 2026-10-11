@@ -15,8 +15,15 @@
 // streamed, spoken when the reply mode says so. A turn that fails elsewhere
 // is said once; this bot's own failures are its own to tell (the turn
 // methods do). Events arrive in order and are handled in order.
+//
+// THE RECORD IS THE FALLBACK. A driver's stream is best effort: it can die
+// mid-turn (the cli's relay stops at its first failed post) and the parts and
+// the turn-end never come. The hold's release always does — turn-ended is
+// retried until it lands — so a bubble still open when the hold lets go is
+// finished from the record: the reply is the last assistant text there.
 import type { PhantomBackend, SessionEvent, TelegramApi } from '@phantom-agent-sdk/backend';
 import { logger, errStr } from '@phantom-agent-sdk/backend';
+import { parseLines, conversationFrom } from '@phantom-agent-sdk/client/transcript';
 import { CLIENT_ID } from './assistant.js';
 
 const log = logger('telegram-watch');
@@ -34,6 +41,9 @@ export class SessionWatch {
   #text = '';
   /** The turn in progress is nobody's business here (stream off, not ours). */
   #ignoring = false;
+  /** The record moved during a turn this watch has not closed: a reply is
+   *  owed to the chat when the hold lets go, whatever the stream delivered. */
+  #owed = false;
 
   constructor(
     private readonly backend: PhantomBackend,
@@ -61,6 +71,9 @@ export class SessionWatch {
 
   async #on(event: SessionEvent, by: string): Promise<void> {
     const own = by === CLIENT_ID;
+    if (event.event === 'turn-start' || event.event === 'turn-end' || event.event === 'error' || (event.event === 'lock' && !event.locked)) {
+      log.info({ chat: this.chatId, session: this.sessionId, event: event.event, by, bubble: this.#bubble !== null }, 'watch event');
+    }
     switch (event.event) {
       case 'turn-start': {
         const mode = await this.stream();
@@ -87,14 +100,20 @@ export class SessionWatch {
         this.#bubble!.appendPart(event.part);
         return;
       }
+      case 'transcript': {
+        if (!this.#ignoring) this.#owed = true;
+        return;
+      }
       case 'turn-end': {
         this.#ignoring = false;
+        this.#owed = false;
         if (!this.#bubble) return;
         const bubble = this.#bubble;
         const typing = this.#typing;
         const text = this.#text;
         this.#bubble = null; this.#typing = null; this.#text = '';
         const said = await bubble.finish(text);
+        log.info({ chat: this.chatId, session: this.sessionId, chars: said.length }, 'watch: reply posted');
         await this.backend.telegramBot.speakText(this.api, this.chatId, said, typing ?? undefined);
         typing?.stop();
         return;
@@ -108,12 +127,36 @@ export class SessionWatch {
         return;
       }
       case 'lock': {
-        // The hold let go with a bubble still open: the turn died where it ran.
-        if (!event.locked && this.#bubble) await this.#close(null);
+        // The hold let go with the turn not closed here — a bubble still
+        // open, or a turn whose stream never arrived at all: the stream died.
+        // The record has the reply.
+        if (!event.locked && (this.#bubble || this.#owed)) await this.#finishFromRecord();
+        if (!event.locked) { this.#owed = false; this.#ignoring = false; }
         return;
       }
       default: return;
     }
+  }
+
+  /** Close the turn with what the record says it answered — into the open
+   *  bubble, or a fresh one when the stream never opened any. */
+  async #finishFromRecord(): Promise<void> {
+    if (!this.#bubble) await this.#open();
+    const bubble = this.#bubble;
+    const typing = this.#typing;
+    this.#bubble = null; this.#typing = null; this.#text = ''; this.#owed = false;
+    let reply = '';
+    try {
+      const messages = conversationFrom(parseLines(await this.backend.sessions.transcript(this.sessionId) ?? ''));
+      const last = [...messages].reverse().find((message) => message.role === 'assistant');
+      if (last) reply = typeof last.content === 'string' ? last.content
+        : last.content.filter((part) => part.type === 'text').map((part) => (part as { text: string }).text).join('');
+    } catch (error) { log.warn({ chat: this.chatId, session: this.sessionId, err: errStr(error) }, 'watch: could not read the record'); }
+    log.info({ chat: this.chatId, session: this.sessionId, chars: reply.length }, 'watch: stream ended early — finishing from the record');
+    if (!bubble) return;
+    const said = await bubble.finish(reply);
+    if (said) await this.backend.telegramBot.speakText(this.api, this.chatId, said, typing ?? undefined);
+    typing?.stop();
   }
 
   async #open(): Promise<void> {
