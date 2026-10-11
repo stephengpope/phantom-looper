@@ -71,13 +71,8 @@ export class Runners {
   constructor(
     private readonly database: Drizzle,
     readonly local: LocalHost,
-    private readonly opts: { runsContainers: boolean; settings?: Settings },
+    private readonly opts: { settings?: Settings },
   ) {}
-
-  /** Whether NEW workspaces may be placed on this server itself
-   *  (RUN_SESSION_CONTAINERS=1; the default is 0). What it already holds it
-   *  serves either way. */
-  get runsContainers(): boolean { return this.opts.runsContainers; }
 
   /** How often a runner beats (`runner_heartbeat_ms`): told to each at
    *  hello; three silent beats and its feed is hung up on. */
@@ -89,7 +84,7 @@ export class Runners {
   /** The registered hosts, as proxies — offline until each connects. */
   async load(): Promise<void> {
     for (const row of await this.database.select().from(runners)) { this.#remote.set(row.id, new RemoteHost(row.id, row.name)); this.#facts.set(row.id, row.facts); }
-    log.info({ hosts: this.#remote.size, runsContainers: this.opts.runsContainers }, 'session runners loaded');
+    log.info({ hosts: this.#remote.size }, 'session runners loaded');
     // A feed whose socket died silently (a laptop off the network) is hung
     // up on here: the host is offline, its jobs wait for its next feed. No
     // event up the relay for three beats = dead, whatever the socket says.
@@ -182,10 +177,9 @@ export class Runners {
     const chosen = (userId ? least(able.filter((row) => row.ownerUserId === userId)) : undefined)
       ?? least(able.filter((row) => row.ownerUserId === null));
     if (chosen) return this.#remote.get(chosen.id)!;
-    if (this.opts.runsContainers) return this.local;
     throw new RunnerError('no_host', userId
       ? 'no session runner is online for you — start one (phantom-cli runner start) or ask for a shared runner'
-      : 'no shared runner runner is online, and this server runs no session containers itself');
+      : 'no shared session runner is online');
   }
 
   /** Where a handed-off turn goes: an online runner that can drive

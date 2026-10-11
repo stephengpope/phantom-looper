@@ -293,15 +293,15 @@ export class PhantomBackend {
     const images = new Images(docker);
     // The backend's own host: this process's volume and Docker. Every workspace
     // call goes through a host (runtime/WorkspaceHost.ts); a workspace pinned
-    // to no runner is here. New workspaces land here only with
-    // RUN_SESSION_CONTAINERS=1: the default is 0 — every new workspace goes
-    // to a session runner (install.sh starts one beside the api), and this
-    // box keeps serving, reaping and sweeping only what it already holds.
+    // to no runner is here — one made before session runners existed. No new
+    // workspace lands here: every one goes to a session runner (the
+    // `session-runner` service beside the api, or any box running runners/).
+    // This box keeps serving, reaping and sweeping only what it already holds.
     const localHost = new LocalHost(docker, images, paths, {
       volume: process.env.WORKSPACE_VOLUME, network: process.env.AGENT_NETWORK, databaseContainer: process.env.AGENT_DATABASE_CONTAINER,
       diskQuota: process.env.DISK_QUOTA_URL || undefined, apiImage: process.env.API_IMAGE,
     });
-    const runners = new Runners(database.system, localHost, { runsContainers: /^(1|on|true|yes)$/i.test(process.env.RUN_SESSION_CONTAINERS ?? '0'), settings });
+    const runners = new Runners(database.system, localHost, { settings });
     await runners.load();
     const workspaces = new Workspaces(database.drizzle, runners, settings, sessionEvents);
     const cards = new Cards(database.drizzle, projects, boardEvents, config.cardFields);
@@ -374,7 +374,6 @@ export class PhantomBackend {
       // stocked only for projects that have had a workspace on it.
       const pool = await checkoutPool.poolFacts(this.projects, this.settings);
       if (pool) {
-        if (this.runners.runsContainers) await checkoutPool.tick(pool, this.paths).catch((error) => log.error({ err: errStr(error) }, 'pool tick threw'));
         for (const runner of this.runners.onlineRunners()) {
           const served = await this.runners.projectsOn(runner.id).catch(() => new Set<string>());
           const mine = pool.filter((project) => served.has(project.id));
