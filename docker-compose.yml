@@ -156,7 +156,7 @@ services:
     command: ["node", "phantom-agent-sdk/packages/backend/dist/runtime/diskQuotaHelper.js"]
     environment:
       QUOTA_MOUNT: /var/lib/docker
-      QUOTA_ROOT: /var/lib/docker/volumes/phantom-runner-workspaces/_data
+      QUOTA_ROOT: /var/lib/docker/volumes/${WORKSPACE_VOLUME:-phantom-runner-workspaces}/_data
     volumes:
       - /var/lib/docker:/var/lib/docker
     healthcheck:
@@ -233,7 +233,7 @@ services:
       BACKEND_CA: ${BACKEND_CA:-}
       HOST_NAME: ${RUNNER_NAME:-}
       WORKSPACE_ROOT_PATH: /workspaces
-      WORKSPACE_VOLUME: phantom-runner-workspaces
+      WORKSPACE_VOLUME: ${WORKSPACE_VOLUME:-phantom-runner-workspaces}
       DOCKER_HOST: tcp://docker-proxy:2375
       AGENT_NETWORK: phantom-agents
       DISK_QUOTA_URL: http://disk-quota:7000
@@ -329,7 +329,7 @@ networks:
 volumes:
   pg-data:
   phantom-runner-workspaces:
-    name: phantom-runner-workspaces   # the session runner's, by name, for the same reason
+    name: ${WORKSPACE_VOLUME:-phantom-runner-workspaces}   # the session runner's, by name: containers mount subpaths of it, the quota helper caps under it
   cloudbeaver-data:
   caddy-data:
   caddy-config:
