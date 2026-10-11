@@ -15,8 +15,8 @@ import type { BackendClient } from './backend.js';
 import type { PublishedTool } from './session.js';
 import type { TranscriptLine } from './transcript.js';
 
-/** The header a server tool call carries its call id in: the api writes the
- *  result line under that id (api/routes/tools.ts). */
+/** The header a server tool call carries its call id in: the api files the
+ *  result under that id in the step it holds (api/routes/tools.ts). */
 export const TOOL_CALL_HEADER = 'x-phantom-tool-call';
 
 export interface ToolKitContext {
@@ -26,9 +26,11 @@ export interface ToolKitContext {
   /** The workspace the session's tools open. */
   workspaceId: string | null;
   readonly: () => boolean;
-  /** The server wrote a record line for this turn (a server tool's result,
-   *  handed back with the answer): file it. */
-  recorded: (written: { line: TranscriptLine; lines: number; updated_at: string }) => void;
+  /** The api filed this call's result itself (it ran the tool and
+   *  answered): the turn sends nothing for it. */
+  filed: (toolCallId: string) => void;
+  /** The api wrote a step (the answer carried it): file it. */
+  recorded: (written: { lines: TranscriptLine[]; count: number; updated_at: string }) => void;
 }
 
 /** What a kit builds: its tools, and which of them change things. */
@@ -40,10 +42,9 @@ export interface BuiltTools {
    *  record is written, and the model is not called again (a verdict, a
    *  hand-off). Absent = none. */
   terminal?: readonly string[];
-  /** Names from `tools` whose results the SERVER writes to the record (it
-   *  ran them): the turn files what comes back and writes nothing itself.
-   *  Absent = the turn writes every result. */
-  recordedByServer?: readonly string[];
+  /** Names from `tools` the SERVER runs (the tool route): what a
+   *  disconnect mid call can leave to the api. Absent = none. */
+  serverTools?: readonly string[];
 }
 
 export interface ToolKit {
@@ -77,17 +78,17 @@ export class ToolKitSet {
 
   add(kit: ToolKit): void { this.kits.set(kit.name, kit); }
 
-  async resolve(ctx: ToolKitContext): Promise<{ tools: Record<string, Tool>; terminal: string[]; recordedByServer: Set<string> }> {
+  async resolve(ctx: ToolKitContext): Promise<{ tools: Record<string, Tool>; terminal: string[]; serverTools: Set<string> }> {
     const tools: Record<string, Tool> = {};
     const terminal: string[] = [];
-    const recordedByServer = new Set<string>();
+    const serverTools = new Set<string>();
     for (const kit of this.kits.values()) {
       const built = await kit.build(ctx);
       Object.assign(tools, guardReadonly(built, ctx));
       terminal.push(...(built.terminal ?? []));
-      for (const name of built.recordedByServer ?? []) recordedByServer.add(name);
+      for (const name of built.serverTools ?? []) serverTools.add(name);
     }
-    return { tools, terminal, recordedByServer };
+    return { tools, terminal, serverTools };
   }
 }
 
@@ -99,9 +100,9 @@ export class ToolKitSet {
  *  and what each one does. Each becomes a tool that POSTs back with the
  *  session header and its call id; the envelope IS the result — the model
  *  reads {ok:false, error:{code, message, retryable}} and self-corrects.
- *  WHOEVER RUNS A TOOL WRITES ITS RESULT: the api ran it, so the api wrote
- *  the result line and hands it back with the answer; this side files it
- *  (ctx.recorded) and the turn writes nothing for it. */
+ *  The api ran it, so the api filed the result in the step it holds
+ *  (ctx.filed): the turn sends nothing for it. An answer that completed the
+ *  step carries what the api wrote (ctx.recorded). */
 export function serverToolKit(listing: readonly PublishedTool[]): ToolKit {
   return {
     name: 'server',
@@ -121,24 +122,24 @@ export function serverToolKit(listing: readonly PublishedTool[]): ToolKit {
             return { type: 'json', value: output as never };
           },
           // The abort signal rides into the request: an interrupt aborts it and
-          // the server stops what the tool was doing. The answer carries the
-          // record line the api wrote (`record`), filed here, never shown to the model.
+          // the server stops what the tool was doing. The answer may carry
+          // what the api wrote (`record`), filed here, never shown to the model.
           // SENT ONCE: a tool call is not idempotent — the connection's retry
           // rule (any 5xx) would run a timed-out command again, for its whole
-          // timeout, and the api would write a second result for the same
-          // call id. The envelope's `retryable` is the MODEL's to act on.
+          // timeout. The envelope's `retryable` is the MODEL's to act on.
           execute: async (args: unknown, opts?: { abortSignal?: AbortSignal; toolCallId?: string }) => {
             const answer = await ctx.backend.callRaw<unknown>('POST', `/tools/${def.name}`, args ?? {},
               { sessionId: ctx.sessionId, signal: opts?.abortSignal, retry: false,
                 headers: opts?.toolCallId ? { [TOOL_CALL_HEADER]: opts.toolCallId } : undefined });
-            const { record, ...envelope } = answer as { record?: { line: TranscriptLine; lines: number; updated_at: string } } & Record<string, unknown>;
+            const { record, ...envelope } = answer as { record?: { lines: TranscriptLine[]; count: number; updated_at: string } } & Record<string, unknown>;
+            if (opts?.toolCallId) ctx.filed(opts.toolCallId);
             if (record) ctx.recorded(record);
             return envelope;
           },
         });
       }
       return Promise.resolve({ tools: out, mutating: listing.filter((tool) => tool.mutates).map((tool) => tool.name),
-        recordedByServer: listing.map((tool) => tool.name) });
+        serverTools: listing.map((tool) => tool.name) });
     },
   };
 }

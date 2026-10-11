@@ -6,46 +6,41 @@
 // loops. ONE runner for every agent and every host. What differs by host is
 // only where the parts go (`onPart`).
 //
-// What is recorded, and when (the record is the server's transcript). Every
-// write goes out in order on the record's one queue, and the turn does NOT
-// wait for it — the stream and the tools run on. The turn waits for its
-// writes once, before it returns. A write that fails after retries STOPS
-// the turn (transcript_write_failed). Nothing runs unrecorded.
+// THE RECORD IS THE API'S TO WRITE, one whole step at a time. This side
+// never writes a line. It hands the api each STEP as it happens:
 //
-// The user's words reach a model run one of two ways:
-//   driving → the words a run OPENS with: the turn's message, or what was
-//             queued when the model had stopped. Written with the model's
-//             first answer. If the run fails before that answer they were
-//             never written, and they are handed back (`unsent`).
-//   riding  → words queued while the model is mid-run, joining its next
-//             call. Written the moment they are taken; never handed back.
+//   model call answered → `step`: the words that drove the call, the
+//                         assistant message, its usage, the calls it made.
+//                         The api holds it until every call is answered
+//                         (or writes it at once when the answer made none).
+//   a tool answered     → `result`, for a result drawn HERE (this side's
+//                         kit, a refusal, a request that never reached the
+//                         api). A server tool the api ran filed its own
+//                         (`filed`): nothing to send.
+//   stopped             → `close`: the api writes the cut step — the text
+//                         as far as it got, the calls seen, the results in
+//                         hand, interrupted for the rest, an `interrupted`
+//                         line — in one write. Nothing was written before.
+//   handed off          → nothing more. At a STEP BOUNDARY (every result in,
+//                         the step written) `handoff()` is a stop condition.
+//                         MID TOOL CALLS (server tools running) the turn
+//                         hands off at once (`handoffNow`): the loop is cut;
+//                         the api holds the step, finishes its tools, writes
+//                         it, and the next driver starts after that.
 //
-//   model call answered → the drivers, the assistant message, the usage line.
-//   each tool finished  → its result, as it lands — unless the SERVER ran it:
-//                         whoever runs a tool writes its result, so the api
-//                         wrote that line and the kit filed it (recordedByServer).
-//                         A tool runs only once the message that asked for it
-//                         is in the record, so results always follow their call.
-//   interrupted         → the drivers if still unanswered, partial text and
-//                         every tool call seen, results for finished tools,
-//                         INTERRUPTED_RESULT for the rest, an `interrupted` line.
-//   handed off          → nothing. At a STEP BOUNDARY (the model answered,
-//                         every tool result in) `handoff()` is a stop condition
-//                         and the record is whole. MID TOOL CALLS (the model
-//                         answered, server tools running) the turn hands off at
-//                         once (`handoffNow`): the loop is cut, the api finishes
-//                         the tools and writes their results, and the next
-//                         driver starts once they are in. Asked mid reply, the
-//                         hand-off takes the moment the first server tool of the
-//                         next step is on its way — never after it ends.
+// Every call to the api goes out in order on one chain; a tool runs only
+// once the api holds the step that made the call. A call that fails STOPS
+// the turn (transcript_write_failed) — nothing runs unrecorded. The words
+// of a model run that failed before the api took its answer were never
+// written: they are handed back (`unsent`).
 import { streamText, stepCountIs, hasToolCall, type AssistantContent, type LanguageModel, type ModelMessage, type SystemModelMessage,
-  type TextStreamPart, type Tool, type ToolCallPart } from 'ai';
+  type TextStreamPart, type Tool, type ToolCallPart, type ToolModelMessage } from 'ai';
 import { PhantomError, asPhantomError } from './errors.js';
 import { isContextTooLong } from './model/languageModel.js';
 import { withRollingCacheMark } from './model/cache.js';
 import type { ModelSpec, Reasoning } from './model/llmConfig.js';
-import { assistantMessageFrom, toolResultMessage, interruptedResultMessage } from './messages.js';
-import { messageLine, usageLine, interruptedLine, userMessage, type TokenTotals, type TranscriptLine } from './transcript.js';
+import { assistantMessageFrom, toolResultMessage } from './messages.js';
+import { userMessage, type TokenTotals, type TokenUsage, type TranscriptLine } from './transcript.js';
 
 /** One part of the model stream, as the AI SDK emits it. Apps see every
  *  part (`onPart`); the turn reads the six it records from. */
@@ -55,14 +50,24 @@ type ToolResult = { type: 'tool-result' | 'tool-error'; toolCallId: string; tool
 type KnownPart = { type: 'text-delta'; text: string } | ToolCall | ToolResult
   | { type: 'finish-step' } | { type: 'error'; error: unknown } | { type: string };
 
+/** A call the model made, named to the api. */
+export interface StepCall { toolCallId: string; toolName: string }
+/** The model's answer, handed to the api. `usage` is absent for an answer
+ *  cut before the call ended. */
+export interface StepOpening { drivers: ModelMessage[]; assistant: ModelMessage | null; usage?: TokenUsage; calls: StepCall[] }
+/** A result drawn on this side, handed to the api. */
+export interface StepResult { toolCallId: string; toolName: string; message: ToolModelMessage }
+/** What the api wrote: the lines, and the record after them. */
+export interface Written { lines: TranscriptLine[]; count: number; updated_at: string }
+
 export interface TurnResult {
   /** The final reply text (the last step's). */
   text: string;
   /** Every message this turn added to the conversation, in order. */
   messages: ModelMessage[];
   usage: TokenTotals;
-  /** `handed_off`: the turn stopped at a step boundary for another driver
-   *  to go on with (TurnInput.handoff); the record is whole, no mark written. */
+  /** `handed_off`: the turn stopped for another driver to go on with
+   *  (TurnInput.handoff / handoffNow); the record is the api's to finish. */
   outcome: 'done' | 'interrupted' | 'handed_off';
 }
 
@@ -75,7 +80,7 @@ export interface TurnInput {
   /** Tools whose call ends the turn after its result lands. */
   terminal: readonly string[];
   /** The conversation so far, as it stands when the turn starts. The
-   *  caller's copy may grow as `record` lands lines; the turn reads it once. */
+   *  caller's copy may grow as steps land; the turn reads it once. */
   history: readonly ModelMessage[];
   maxSteps: number | null;
   reasoning: Reasoning | undefined;
@@ -88,49 +93,56 @@ export interface TurnInput {
   /** What the turn opens with. */
   opening: string[];
   /** The user messages that arrived since, taken: before every model call
-   *  (they ride it, or drive it when it opens a run) and once more when the
-   *  model stops (they drive the next run). */
+   *  (they drive the next step) and once more when the model stops (they
+   *  drive the next run). */
   pending(): string[];
-  /** Append to the record. Called in order; each call must enqueue its
-   *  write before it returns, so the writes land in the order made.
-   *  Rejects → the turn fails. */
-  record(lines: TranscriptLine[]): Promise<void>;
+  /** Hand the api a step: the model's answer. Resolves once the api holds
+   *  it — written when the answer made no call. Rejects → the turn fails. */
+  step(opening: StepOpening): Promise<Written | null>;
+  /** Hand the api a result drawn here. Resolves with the write when it was
+   *  the step's last. */
+  result(result: StepResult): Promise<Written | null>;
+  /** The loop stopped: the api closes the step. `opening` is the answer the
+   *  api never got (cut mid reply), null when it holds it already. */
+  close(opening: StepOpening | null): Promise<Written | null>;
+  /** The api wrote a step: file it. */
+  onWritten(written: Written): void;
+  /** Call ids whose results the api filed itself (it ran the tool and
+   *  answered): the turn sends nothing for these. */
+  filed: ReadonlySet<string>;
   onPart(part: StreamPart): void;
   /** A tool answered with an error (the model still gets it). */
   onToolError(name: string, error: unknown): void;
-  /** A run failed before its drivers were written: those words are the
-   *  caller's again. Riders are never handed back — they were written. */
+  /** A run failed before the api took its drivers: those words are the
+   *  caller's again. */
   unsent(texts: string[]): void;
   /** Asked after every step whose tool calls all landed: true ends the turn
    *  there as `handed_off` — the model is not called again here. A step that
    *  ended the run on its own (the model stopped, a terminal tool) is done,
    *  whatever this says. */
   handoff(): boolean;
-  /** Tools whose results the server writes to the record (it ran them): the
-   *  turn writes nothing for these, and never a placeholder either. */
-  recordedByServer: ReadonlySet<string>;
   /** Hear a disconnect the moment it is asked (the turn may hand off at once
    *  while server tools run). Answers the unsubscribe. */
   onDisconnect(listener: () => void): () => void;
   /** Hand the turn off NOW, mid tool calls: true when a runner took it — the
-   *  loop is cut and the turn ends `handed_off`, writing nothing (the api
-   *  finishes the tools and writes their results); false to go on here. */
+   *  loop is cut and the turn ends `handed_off` (the api finishes the step);
+   *  false to go on here. */
   handoffNow(): Promise<boolean>;
+  /** Tools the api runs (its own, through the tool route): what a
+   *  disconnect can leave to it. */
+  serverTools: ReadonlySet<string>;
 }
 
 /** The step in flight, from its parts: text, tool calls, results. Used for
- *  the cut step — an interrupt closes the stream before the model call
- *  ends — and to know which calls still owe a result. */
+ *  the cut step — a stop closes the stream before the model call ends —
+ *  and to know which calls still owe a result. */
 class StepInFlight {
   text = '';
   calls: ToolCallPart[] = [];
   answered = new Set<string>();
-  /** Results that arrived before the assistant message was recorded. */
-  held: TranscriptLine[] = [];
-  assistantRecorded = false;
-  /** The write of this step's assistant message: a tool runs after it landed. */
-  written: Promise<unknown> = Promise.resolve();
-  reset(): void { this.text = ''; this.calls = []; this.answered = new Set(); this.held = []; this.assistantRecorded = false; this.written = Promise.resolve(); }
+  /** The api holds this step's answer (the `step` call landed): a tool runs after. */
+  opened: Promise<unknown> | null = null;
+  reset(): void { this.text = ''; this.calls = []; this.answered = new Set(); this.opened = null; }
 }
 
 /** What one turn accumulates across its model loops. */
@@ -157,18 +169,19 @@ class RepeatedFailures {
   succeeded(): void { this.#signature = ''; this.#count = 0; }
 }
 
-/** The record failure, if one landed during the callbacks. Read through a
+/** The api failure, if one landed during the callbacks. Read through a
  *  function: the field is set from AI SDK callbacks, which TypeScript cannot
  *  see, so an inline read is narrowed to its initial null. */
-function throwIfFailed(state: { recordFailure: PhantomError | null }): void {
-  if (state.recordFailure) throw state.recordFailure;
+function throwIfFailed(state: { failure: PhantomError | null }): void {
+  if (state.failure) throw state.failure;
 }
 
 export async function runTurn(input: TurnInput): Promise<TurnResult> {
   const tally: Tally = { added: [], usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, text: '' };
-  // The conversation as the turn found it. `record` grows the caller's copy
-  // as lines land, so the loops below build from this snapshot plus what
-  // the turn added — never from a copy that already holds the additions.
+  // The conversation as the turn found it. Steps land in the caller's copy
+  // as the api writes them, so the loops below build from this snapshot
+  // plus what the turn added — never from a copy that already holds the
+  // additions.
   const history = [...input.history];
   let carry = input.opening;
   for (;;) {
@@ -200,16 +213,16 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
   const step = new StepInFlight();
   // Set from the AI SDK's callbacks, read after the stream — a holder, so
   // the reads are not narrowed to their initial values.
-  //   drivers   — this run's opening words, not yet sent with a written answer
-  //   unwritten — drivers whose answer's write is still on its way
-  //   writes    — the record queue's tail: awaited once, before returning
-  const state: { drivers: ModelMessage[]; unwritten: ModelMessage[]; writes: Promise<void>; recordFailure: PhantomError | null } =
-    { drivers: carry.map(userMessage), unwritten: [], writes: Promise.resolve(), recordFailure: null };
+  //   drivers   — the words the next model call opens with, not yet handed over
+  //   unwritten — drivers handed to the api in a step not yet acknowledged
+  //   chain     — every call to the api, in order: awaited once, before returning
+  const state: { drivers: ModelMessage[]; unwritten: ModelMessage[]; chain: Promise<unknown>; failure: PhantomError | null } =
+    { drivers: carry.map(userMessage), unwritten: [], chain: Promise.resolve(), failure: null };
   try {
     return await streamModelLoop();
   } catch (error) {
-    // The run failed with its drivers never written: they are the caller's
-    // again. (A stop writes them before it returns — see below.)
+    // The run failed with its drivers never taken: they are the caller's
+    // again. (A stop hands them over before it returns — see below.)
     const back = [...state.unwritten, ...state.drivers];
     if (back.length) input.unsent(back.map(userText));
     throw error;
@@ -222,18 +235,18 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
      *  the condition made from one the model made. */
     let handedOff = false;
     /** The turn left mid tool calls (handoffNow took): the loop was cut for
-     *  it, and nothing is written — the api owes the open results. */
+     *  it; the api owes the step. */
     let handedOffMidTools = false;
     let handingOff = false;
     /** Server tool calls running right now — what a disconnect can leave to the api. */
     let serverToolsInFlight = 0;
-    /** Hand off now, if the turn is where it can: the call is in the record
-     *  and a server tool is running (the api finishes it). Tried at the two
+    /** Hand off now, if the turn is where it can: the api holds the step and
+     *  a server tool is running (the api finishes it). Tried at the two
      *  moments that can newly hold — the disconnect itself, and a server tool
      *  starting when a hand-off is pending. A disconnect that lands mid reply
      *  is nothing to act on yet; the next tool start is where it takes. */
     const handoffNow = () => {
-      if (handingOff || !step.assistantRecorded || serverToolsInFlight === 0) return;
+      if (handingOff || !step.opened || serverToolsInFlight === 0) return;
       handingOff = true;
       void input.handoffNow().then((taken) => {
         if (taken) { handedOffMidTools = true; abort.abort(new Error('handed off')); }
@@ -242,36 +255,41 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
     };
     const offDisconnect = input.onDisconnect(handoffNow);
     /** Set by the breaker: the stream is cut like a stop, the cut step
-     *  recorded, then this is thrown instead of the stop's return. */
+     *  closed, then this is thrown instead of the stop's return. */
     let tripped: PhantomError | undefined;
     const failures = new RepeatedFailures();
 
-    // Every record goes through here, in order, without waiting: the write
-    // is queued and the turn runs on. A failure ends the turn and is kept to
-    // be thrown once the stream has closed (the AI SDK swallows what a
-    // callback throws — verified: util/notify.ts `catch {}`). Answers whether
-    // the write landed.
-    const record = (lines: TranscriptLine[]): Promise<boolean> => {
-      if (state.recordFailure) return Promise.resolve(false);
-      for (const line of lines) if (line.type === 'message') tally.added.push(line.message);
-      const write = input.record(lines).then(() => true, (error: unknown) => {
-        if (!state.recordFailure) {
-          state.recordFailure = asPhantomError(error, 'transcript_write_failed', 'recording the turn');
-          abort.abort(state.recordFailure);
+    // Every call to the api goes through here, in order, without waiting:
+    // the call is queued and the turn runs on. A failure ends the turn and
+    // is kept to be thrown once the stream has closed (the AI SDK swallows
+    // what a callback throws — verified: util/notify.ts `catch {}`). What
+    // the api wrote is filed as it answers.
+    const send = (call: () => Promise<Written | null>): Promise<boolean> => {
+      if (state.failure) return Promise.resolve(false);
+      const made = state.chain.then(call).then((written) => {
+        if (written) {
+          for (const line of written.lines) if (line.type === 'message') tally.added.push(line.message);
+          input.onWritten(written);
+        }
+        return true;
+      }, (error: unknown) => {
+        if (!state.failure) {
+          state.failure = asPhantomError(error, 'transcript_write_failed', 'recording the turn');
+          abort.abort(state.failure);
         }
         return false;
       });
-      state.writes = state.writes.then(() => write.then(() => undefined));
-      return write;
+      state.chain = made;
+      return made;
     };
-    /** Every write made so far has landed (or failed). */
-    const settled = async () => { await state.writes; throwIfFailed(state); };
+    /** Every call made so far has landed (or failed). */
+    const settled = async () => { await state.chain; throwIfFailed(state); };
 
     const result = streamText({
       model: input.model,
       instructions: input.system,
       messages: [...history, ...tally.added, ...state.drivers],
-      tools: gated(input.tools, step, input.recordedByServer, (delta) => { serverToolsInFlight += delta; if (delta > 0 && input.handoff()) handoffNow(); }),
+      tools: gated(input.tools, step, input.serverTools, (delta) => { serverToolsInFlight += delta; if (delta > 0 && input.handoff()) handoffNow(); }),
       stopWhen: [
         ...(input.maxSteps == null ? [] : [stepCountIs(input.maxSteps)]),
         ...(input.terminal.length ? [hasToolCall(...input.terminal)] : []),
@@ -285,24 +303,20 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
       abortSignal: abort.signal,
       ...(input.reasoning ? { reasoning: input.reasoning } : {}),
 
-      prepareStep: ({ messages, stepNumber }) => {
+      prepareStep: ({ messages }) => {
         step.reset();
+        // Words that arrived since the last call ride this one: they drive
+        // it, and go to the api with its answer.
         const more = input.pending().map(userMessage);
-        if (more.length && stepNumber === 0) {
-          // The run has not been answered yet: these open it with the rest.
-          state.drivers.push(...more);
-        } else if (more.length) {
-          // The model is mid-run: these ride its next call, written now.
-          void record(more.map(messageLine));
-        }
+        state.drivers.push(...more);
         return { messages: withRollingCacheMark([...messages, ...more]) };
       },
 
       onLanguageModelCallEnd: (callEnd) => {
-        // The model answered: the drivers (first call of the run), the
-        // answer, its usage — queued for the record, not waited on.
+        // The model answered: the step goes to the api — the drivers, the
+        // answer, its usage, the calls — queued, not waited on.
         const assistant = assistantMessageFrom(callEnd.content);
-        const callUsage = {
+        const callUsage: TokenUsage = {
           provider: input.spec.provider, model: input.spec.model, responseId: callEnd.responseId,
           input: callEnd.usage.inputTokens ?? 0, output: callEnd.usage.outputTokens ?? 0,
           cacheRead: callEnd.usage.inputTokenDetails?.cacheReadTokens ?? 0,
@@ -313,16 +327,9 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
         const drivers = state.drivers;
         state.drivers = [];
         state.unwritten.push(...drivers);
-        const lines: TranscriptLine[] = [
-          ...drivers.map(messageLine),
-          ...(assistant ? [messageLine(assistant)] : []),
-          usageLine(callUsage),
-          ...step.held,
-        ];
-        step.held = [];
-        step.assistantRecorded = true;
-        step.written = record(lines).then((written) => {
-          if (written) state.unwritten = state.unwritten.filter((message) => !drivers.includes(message));
+        const calls = callsOf(assistant, input.tools);
+        step.opened = send(() => input.step({ drivers, assistant, usage: callUsage, calls })).then((taken) => {
+          if (taken) state.unwritten = state.unwritten.filter((message) => !drivers.includes(message));
         });
       },
     });
@@ -332,7 +339,7 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
         // Handed off mid tool calls: what the cut stream still emits — the
         // aborted calls reporting as tool errors, the abort itself — is the
         // cut's residue, not the turn's. Nobody hears it; the api finishes
-        // those calls and the record carries their real results.
+        // the step.
         if (handedOffMidTools) continue;
         const part = raw as KnownPart;
         switch (part.type) {
@@ -348,10 +355,13 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
             const isError = toolResult.type === 'tool-error';
             if (isError) input.onToolError(toolResult.toolName, toolResult.error);
             step.answered.add(toolResult.toolCallId);
-            if (!input.recordedByServer.has(toolResult.toolName)) {
-              const line = messageLine(await toolResultMessage(toolResult, input.tools[toolResult.toolName], isError));
-              if (step.assistantRecorded) void record([line]);
-              else step.held.push(line);
+            // A result the api filed itself needs no sending; any other —
+            // this side's kit, a refusal, a request that never got there —
+            // is this side's to hand over.
+            if (!input.filed.has(toolResult.toolCallId)) {
+              const tool = input.tools[toolResult.toolName];
+              void send(async () => input.result({ toolCallId: toolResult.toolCallId, toolName: toolResult.toolName,
+                message: await toolResultMessage(toolResult, tool, isError) }));
             }
             if (!isError) failures.succeeded();
             else if (failures.failed(toolResult.toolName, toolResult.input) >= TOOL_FAILURE_LIMIT && !tripped) {
@@ -369,8 +379,8 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
       }
     } catch (error) {
       // A stop closes the stream by throwing its reason out of the iteration,
-      // or with an `abort` part. The cut step is recorded below; anything
-      // else is the stream's own failure.
+      // or with an `abort` part. The cut step is closed below; anything else
+      // is the stream's own failure.
       if (!abort.signal.aborted) throw error;
     } finally {
       outer.removeEventListener('abort', onOuterAbort);
@@ -381,28 +391,22 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
     await result.response.then(() => undefined, () => undefined);
     await settled();
 
-    // Left mid tool calls: the record holds the call; the api writes the
-    // results as the tools end, and the next driver starts after them.
+    // Left mid tool calls: the api holds the step and finishes it; the next
+    // driver starts after that.
     if (handedOffMidTools) return 'handed_off';
 
     if (abort.signal.aborted) {
-      // The cut step. Nothing streamed = nothing to record beyond the
-      // drivers that were sent and the mark.
-      const lines: TranscriptLine[] = [];
-      if (!step.assistantRecorded) {
-        lines.push(...state.drivers.map(messageLine));
-        const content: AssistantContent = [...(step.text ? [{ type: 'text' as const, text: step.text }] : []), ...step.calls];
-        if (content.length) lines.push(messageLine({ role: 'assistant', content }));
-        lines.push(...step.held);
-      }
-      // The server's open calls were cut with their requests: the api kills
-      // those (the caller still held the session) and writes nothing, so the
-      // placeholder is this side's for every unanswered call.
-      for (const call of step.calls) if (!step.answered.has(call.toolCallId)) lines.push(messageLine(interruptedResultMessage(call)));
-      lines.push(interruptedLine());
-      state.unwritten.push(...state.drivers);
+      // The cut step: the api closes it with the truth — what the model had
+      // said, the results in hand, interrupted for the rest. The answer the
+      // api never got (cut mid reply) goes with the close.
+      const drivers = state.drivers;
       state.drivers = [];
-      if (await record(lines)) state.unwritten = [];
+      state.unwritten.push(...drivers);
+      const opened = step.opened !== null;
+      const content: AssistantContent = [...(step.text ? [{ type: 'text' as const, text: step.text }] : []), ...step.calls];
+      const opening: StepOpening | null = opened ? null
+        : { drivers, assistant: content.length ? { role: 'assistant', content } : null, calls: step.calls.map(({ toolCallId, toolName }) => ({ toolCallId, toolName })) };
+      if (await send(() => input.close(opening))) state.unwritten = [];
       await settled();
       if (tripped) throw tripped;
       if (step.text) tally.text = step.text;
@@ -424,19 +428,29 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
   }
 }
 
-/** The tools, each gated: it runs once this step's assistant message landed
- *  in the record (the AI SDK starts tools after the model call ended, so the
- *  write is queued by then — this waits for it to land), so a result can
- *  never precede its call. Server tools also count themselves in flight —
- *  counted AFTER the call went out, so whoever acts on the count (a hand-off)
- *  acts on a request the api has. */
+/** The calls an answer made that will be answered: every tool-call part
+ *  for a tool this side can run (the AI SDK runs those; a call to a tool
+ *  with no executor gets no result and is not waited for). */
+function callsOf(assistant: ModelMessage | null, tools: Record<string, Tool>): StepCall[] {
+  if (!assistant || typeof assistant.content === 'string') return [];
+  return assistant.content
+    .filter((part): part is ToolCallPart => part.type === 'tool-call' && !!tools[part.toolName]?.execute)
+    .map(({ toolCallId, toolName }) => ({ toolCallId, toolName }));
+}
+
+/** The tools, each gated: it runs once the api holds this step's answer
+ *  (the AI SDK starts tools after the model call ended, so the `step` call
+ *  is queued by then — this waits for it to land), so a result can never
+ *  reach the api before its call. Server tools also count themselves in
+ *  flight — counted AFTER the call went out, so whoever acts on the count
+ *  (a hand-off) acts on a request the api has. */
 function gated(tools: Record<string, Tool>, step: StepInFlight, server: ReadonlySet<string>, inFlight: (delta: 1 | -1) => void): Record<string, Tool> {
   const out: Record<string, Tool> = {};
   for (const [name, tool] of Object.entries(tools)) {
     if (!tool.execute) { out[name] = tool; continue; }
     const inner = tool.execute as (args: unknown, options: unknown) => unknown;
     out[name] = { ...tool, execute: async (args: unknown, options: unknown) => {
-      await step.written;
+      await step.opened;
       const counted = server.has(name);
       const running = inner(args, options);
       if (counted) inFlight(1);

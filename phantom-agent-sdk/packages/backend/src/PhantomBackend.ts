@@ -55,7 +55,7 @@ import { Mailer } from './mail/Mailer.js';
 import { Media } from './media/Media.js';
 import { CronScheduler, CRON_STARTER, type CronAgent } from './crons/CronScheduler.js';
 import { Turns } from './host/Turns.js';
-import { ToolCalls } from './agents/ToolCalls.js';
+import { Steps } from './agents/Steps.js';
 import { Identity, type IdentityOptions } from './identity/Identity.js';
 import { SessionTitler, type TitleWriter } from './agents/SessionTitler.js';
 import { HttpApi } from './api/HttpApi.js';
@@ -170,9 +170,8 @@ export class PhantomBackend {
   readonly boardEvents: BoardEvents;
   readonly settingsEvents: SettingsEvents;
   readonly foregroundCommands: ForegroundCommands;
-  /** The server tool calls in flight per session, and the writer of their
-   *  results: the api ran them, so the api records them (agents/ToolCalls.ts). */
-  readonly toolCalls: ToolCalls;
+  /** The one writer of a turn's steps (agents/Steps.ts). */
+  readonly steps: Steps;
   readonly notifications = new Notifications();
   /** Outbound mail (SMTP, the smtp_* settings). */
   readonly mailer: Mailer;
@@ -225,8 +224,8 @@ export class PhantomBackend {
     this.docker = built.docker; this.images = built.images; this.sessionContainers = built.sessionContainers;
     this.deployment = new Deployment(built.tokenLog, built.docker, built.images, config.deployment);
     this.runners = built.runners; this.telegramBotState = built.telegramBotState;
-    this.toolCalls = new ToolCalls(this.sessions, this.sessionEvents);
-    this.turns = new Turns(this.sessions, this.runners, this.settings, this.sessionEvents, this.toolCalls);
+    this.steps = new Steps(this.sessions, this.sessionEvents);
+    this.turns = new Turns(this.sessions, this.runners, this.settings, this.sessionEvents, this.steps);
     this.telegramSentMessages = built.telegramSentMessages; this.telegramHandledUpdates = built.telegramHandledUpdates;
     this.sessionTitler = new SessionTitler(this.sessions, config.writeTitle);
     this.mailer = new Mailer(this.settings);

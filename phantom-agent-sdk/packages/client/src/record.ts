@@ -58,13 +58,13 @@ export class SessionRecord {
     return more;
   }
 
-  /** A line the SERVER wrote for this client — a server tool's result,
-   *  written by the api that ran the tool and handed back with the answer
-   *  (toolkit.ts). Filed as if written here: the count and the stamp are
-   *  the server's after that write, so the next append's `after` is right. */
-  adopt(written: { line: TranscriptLine; lines: number; updated_at: string }): void {
-    this.#hold([written.line]);
-    this.#count = written.lines;
+  /** A step the SERVER wrote for this client's turn (the api is the one
+   *  writer of steps), handed back with an answer. Filed as if written
+   *  here: the count and the stamp are the server's after that write, so
+   *  the next append's `after` is right. */
+  adopt(written: { lines: TranscriptLine[]; count: number; updated_at: string }): void {
+    this.#hold(written.lines);
+    this.#count = written.count;
     this.#stamp = written.updated_at;
   }
 

@@ -8,12 +8,12 @@
 // its copy the server's (`makeCurrent`). A step left cut by a crash (tool
 // calls with no results) is answered then, so the next model call is one the
 // provider accepts.
-import type { ModelMessage, ToolCallPart } from 'ai';
+import type { ModelMessage } from 'ai';
 import type { BackendClient } from './backend.js';
+import type { StepOpening, StepResult, Written } from './turn.js';
 import { asPhantomError, type PhantomError } from './errors.js';
-import { interruptedResultMessage } from './messages.js';
 import { SessionRecord } from './record.js';
-import { conversationFrom, cutLastAssistantMessage, messageLine, type TokenTotals, type TranscriptLine } from './transcript.js';
+import { conversationFrom, cutLastAssistantMessage, type TokenTotals, type TranscriptLine } from './transcript.js';
 import type { LlmConfig } from './model/llmConfig.js';
 import type { StoredSystemPrompt, SystemPromptLayout } from './systemPrompt.js';
 
@@ -148,8 +148,8 @@ export class Session implements SessionInfo {
   /** The last turn's end has reached the server (or failed, reported). */
   ended(): Promise<void> { return this.#ending; }
 
-  /** Under the lock: make this copy the server's — read what others added,
-   *  answer a step a crash left cut. Answers what the CONVERSATION gained,
+  /** Under the lock: make this copy the server's — read what others added.
+   *  Answers what the CONVERSATION gained,
    *  or null when it gained nothing — a record that moved by bookkeeping
    *  alone (the server's system_prompt_rebuilt mark, a usage line) is not a
    *  conversation that moved forward elsewhere, and a host must not repaint
@@ -168,9 +168,31 @@ export class Session implements SessionInfo {
         if (added.length) gained = { from, added };
       }
     }
-    const cut = danglingCalls(this.#messages);
-    if (cut.length) await this.append(cut.map((call) => messageLine(interruptedResultMessage(call))));
     return gained;
+  }
+
+  // ── the turn's steps: the api writes them ───────────────────────────────
+
+  /** Hand the api the model's answer: held until every call is answered,
+   *  written at once when it made none. What the api wrote comes back. */
+  async step(opening: StepOpening): Promise<Written | null> {
+    return this.#written(await this.backend.call<{ record: Written | null }>('POST', `/sessions/${this.id}/step`, opening));
+  }
+
+  /** Hand the api results drawn here. */
+  async results(results: StepResult[]): Promise<Written | null> {
+    return this.#written(await this.backend.call<{ record: Written | null }>('POST', `/sessions/${this.id}/step/results`, { results }));
+  }
+
+  /** The loop stopped: the api closes the step with the truth. `opening` is
+   *  the answer the api never got, null when it holds it. */
+  async closeStep(opening: StepOpening | null): Promise<Written | null> {
+    return this.#written(await this.backend.call<{ record: Written | null }>('POST', `/sessions/${this.id}/step/close`, opening ? { opening } : {}));
+  }
+
+  #written(answer: { record: Written | null }): Written | null {
+    if (answer.record) this.adopt(answer.record);
+    return answer.record;
   }
 
   /** Append to the record; the conversation grows with it. Answers the
@@ -185,11 +207,11 @@ export class Session implements SessionInfo {
     return added;
   }
 
-  /** A record line the server wrote for this turn (a server tool's result):
-   *  filed in the record and the conversation as if this client wrote it. */
-  adopt(written: { line: TranscriptLine; lines: number; updated_at: string }): void {
+  /** A step the server wrote for this turn: filed in the record and the
+   *  conversation as if this client wrote it. */
+  adopt(written: Written): void {
     this.record.adopt(written);
-    if (written.line.type === 'message') this.#messages.push(written.line.message);
+    for (const line of written.lines) if (line.type === 'message') this.#messages.push(line.message);
   }
 
   /** Read what others wrote since this copy's count (a server tool's result
@@ -205,20 +227,3 @@ export class Session implements SessionInfo {
   cutLastReply(text: string): void { cutLastAssistantMessage(this.#messages, text); }
 }
 
-/** The tool calls of the last assistant message that never got a result —
- *  what a step cut by a crash leaves behind. Results may follow the call as
- *  separate tool messages (one per landed result), so the walk is: back to
- *  the last assistant message, collecting what was answered after it. */
-function danglingCalls(messages: readonly ModelMessage[]): ToolCallPart[] {
-  const answered = new Set<string>();
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i]!;
-    if (message.role === 'tool') {
-      for (const part of message.content) if (part.type === 'tool-result') answered.add(part.toolCallId);
-      continue;
-    }
-    if (message.role !== 'assistant' || typeof message.content === 'string') return [];
-    return message.content.filter((part): part is ToolCallPart => part.type === 'tool-call' && !answered.has(part.toolCallId));
-  }
-  return [];
-}

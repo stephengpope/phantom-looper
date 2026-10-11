@@ -4,7 +4,7 @@
 export { Agent, type AgentHandlers, type Notice, type SendOptions, type Disconnected } from './agent.js';
 export type { SessionInfo, SessionRow, HandoffTarget } from './session.js';
 export type { AgentEvents } from './events.js';
-export type { TurnResult, StreamPart } from './turn.js';
+export type { TurnResult, StreamPart, StepOpening, StepResult, StepCall, Written } from './turn.js';
 export type { QueueEntry, UserMessages } from './userMessages.js';
 export type { TokenTotals } from './transcript.js';
 
@@ -17,8 +17,8 @@ export type { RetryPolicy } from './model/retry.js';
 
 // Tools only the app can serve (`agent.addToolKit(kit)`).
 export { TOOL_CALL_HEADER, type ToolKit, type ToolKitContext, type BuiltTools } from './toolkit.js';
-// A server tool's result as its record line — the backend writes it when it ran the tool.
-export { serverToolResultLine } from './messages.js';
+// The record's shapes the backend writes: a server tool's result, a call cut before its result.
+export { serverToolResultLine, interruptedResultMessage, INTERRUPTED_RESULT } from './messages.js';
 
 // A billed model for an app's one-shot call (a title, a commit message).
 export { billedModel, type Billing, type ModelHooks } from './model/languageModel.js';

@@ -10,6 +10,7 @@ import { copyScratch } from '../../runtime/scratch.js';
 
 import { ok, err } from '../HttpApi.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
+import type { StepOpening, StepResult } from '../../agents/Steps.js';
 import { sessionPin } from '../../agents/AgentConfig.js';
 import type { SystemPromptLayout, StoredSystemPrompt } from '@phantom-agent-sdk/client/systemPrompt';
 import { SystemPromptError } from '../../agents/SystemPrompt.js';
@@ -354,6 +355,63 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       const ttl = await ctx.settings.resolve('session_lock_ttl_ms');
       await ctx.sessions.renewLock(session.id, client, Number(ttl));
       return ok({ lines: appended.lines, applied: appended.applied, updated_at: appended.stamp.toISOString() });
+    });
+
+  // ---- the turn's steps ----------------------------------------------------
+  // The api is the one writer of a turn's steps (agents/Steps.ts): the
+  // driver hands over the model's answer and the results it drew itself; the
+  // api runs the server tools; the step is written whole once every call is
+  // answered, or closed with the truth when the driver stops. Only the
+  // holder may hand a step over.
+  const STEP_OPENING = { type: 'object', required: ['drivers', 'assistant', 'calls'], additionalProperties: false, properties: {
+    drivers: { type: 'array', items: { type: 'object' }, description: 'The user messages that drove this call.' },
+    assistant: { type: ['object', 'null'], description: 'The assistant message, as the model answered.' },
+    usage: { type: 'object', description: 'The call\'s token usage; absent for an answer cut mid reply.' },
+    calls: { type: 'array', items: { type: 'object', required: ['toolCallId', 'toolName'], properties: { toolCallId: { type: 'string' }, toolName: { type: 'string' } } },
+      description: 'The calls the answer made that will be answered.' } } };
+  const STEP_RESULTS = { type: 'array', items: { type: 'object', required: ['toolCallId', 'toolName', 'message'],
+    properties: { toolCallId: { type: 'string' }, toolName: { type: 'string' }, message: { type: 'object' } } } };
+  const holderOf = async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply): Promise<{ session: SessionRow; client: string } | null> => {
+    const client = clientOf(req);
+    if (!client) { void reply.code(400).send(err('missing_client', 'x-phantom-client header required')); return null; }
+    const session = await ctx.sessions.get(req.params.id);
+    if (!session) { void reply.code(404).send(err('session_not_found', `no session ${req.params.id}`)); return null; }
+    if (session.lockedBy !== client) {
+      void reply.code(409).send(session.lockedBy ? lockedErr(session) : err('session_not_held', 'hold the session (POST /sessions/:id/turn-start) before handing it a step'));
+      return null;
+    }
+    return { session, client };
+  };
+  app.post<{ Params: { id: string }; Body: StepOpening & { results?: StepResult[] } }>(
+    '/sessions/:id/step', { bodyLimit: 64 * 1024 * 1024, schema: { ...TAG,
+      summary: 'Hand the api a step',
+      description: 'The driver hands over the model\'s answer. The api holds it until every call it made is answered, then writes the whole step; an answer that made no call is written at once. Answers what was written, if anything.',
+      params: idParam, body: { ...STEP_OPENING, properties: { ...STEP_OPENING.properties, results: STEP_RESULTS } } } },
+    async (req, reply) => {
+      const held = await holderOf(req, reply);
+      if (!held) return reply;
+      const { results, ...opening } = req.body;
+      return ok({ record: await ctx.steps.open(held.session.id, held.client, opening, results ?? []) });
+    });
+  app.post<{ Params: { id: string }; Body: { results: StepResult[] } }>(
+    '/sessions/:id/step/results', { bodyLimit: 64 * 1024 * 1024, schema: { ...TAG,
+      summary: 'Hand the api results',
+      description: 'Results the driver drew itself (its own tools). Answers what was written when they completed the step.',
+      params: idParam, body: { type: 'object', required: ['results'], additionalProperties: false, properties: { results: STEP_RESULTS } } } },
+    async (req, reply) => {
+      const held = await holderOf(req, reply);
+      if (!held) return reply;
+      return ok({ record: await ctx.steps.results(held.session.id, held.client, req.body.results) });
+    });
+  app.post<{ Params: { id: string }; Body: { opening?: StepOpening; results?: StepResult[] } }>(
+    '/sessions/:id/step/close', { bodyLimit: 64 * 1024 * 1024, schema: { ...TAG,
+      summary: 'Close the step',
+      description: 'The driver stopped: the api writes the step with the truth — the results in hand, interrupted for the rest, an interrupted mark. `opening` is the answer the api never got (cut mid reply).',
+      params: idParam, body: { type: 'object', additionalProperties: false, properties: { opening: STEP_OPENING, results: STEP_RESULTS } } } },
+    async (req, reply) => {
+      const held = await holderOf(req, reply);
+      if (!held) return reply;
+      return ok({ record: await ctx.steps.close(held.session.id, held.client, req.body?.opening ?? null, req.body?.results ?? []) });
     });
 
   app.get('/sessions/events', { schema: { ...TAG, summary: 'Stream session list changes',
@@ -706,6 +764,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       if (!expires) return reply.code(409).send(lockedErr(session));
       held = true;
       if (callerGone) { await releaseHold(ctx, session, client); return; }
+      // A step the previous driver left open (it died mid step): closed
+      // with the truth now, under this hold, before anything else lands.
+      if (ctx.steps.isOpen(session.id)) await ctx.steps.close(session.id, client, null);
       ctx.sessionEvents.publish(session.id, client, lockEvent(session, { locked: true, by: client, label: req.body.label ?? session.lockedLabel ?? null, expires }));
       if (session.lockedBy !== client) void publishBoardLock(ctx, session.id, true);
       // The session's notes land now, under the hold, ahead of whatever the
@@ -778,8 +839,11 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       // not take the session over (a card run's session stays the card run's).
       const ended = await ctx.sessions.turnEnded(session, client === GIT_CLIENT_ID ? null : actorOf(req));
       if (!ended.nameManual && ctx.sessionTitler.isDue(ended.name, ended.turnCount)) void ctx.sessionTitler.name(session.id);
+      // A step still open (the driver ended without closing it) is closed
+      // with the truth, under the hold about to go.
+      if (ctx.steps.isOpen(session.id)) await ctx.steps.close(session.id, client, null);
       // The turn's tool call ids are done with: a new turn never repeats one.
-      ctx.toolCalls.forget(session.id);
+      ctx.steps.forget(session.id);
       // The hold a turn-start took ends here: one request opens a turn, one
       // closes it. A caller that never held it (a whole-file writer of old)
       // releases nothing.

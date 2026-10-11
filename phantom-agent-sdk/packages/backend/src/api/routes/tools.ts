@@ -87,19 +87,19 @@ export function toolRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         const { session, project } = await sessionOf(ctx, String(req.headers[SESSION_HEADER] ?? ''));
         const client = clientOf(req);
         // The call's id, when the caller is an agent's turn: the api ran the
-        // tool, so the api writes its result to the record (ToolCalls) and
-        // hands the line back with the answer. A call with no id (a script
-        // cron's bash) records its own.
+        // tool, so the api files its result in the step it holds (Steps) and
+        // hands back what it wrote when that completed the step. A call
+        // with no id (a script cron's bash) belongs to no step.
         const toolCallId = typeof req.headers[TOOL_CALL_HEADER] === 'string' ? req.headers[TOOL_CALL_HEADER] : '';
         // A call id runs once: a request repeating one (the caller retried)
-        // is answered what the first run answered — see ToolCalls.claim.
+        // is answered what the first run answered — see Steps.claim.
         const answer = toolCallId
-          ? await ctx.toolCalls.claim(session.id, toolCallId, run)
+          ? await ctx.steps.claim(session.id, toolCallId, run)
           : await run();
         return reply.code(answer.status).send(answer.body);
 
         async function run(): Promise<{ status: number; body: unknown }> {
-        if (toolCallId) end = ctx.toolCalls.begin(session.id);
+        if (toolCallId) end = ctx.steps.begin(session.id, toolCallId);
         // The client aborting its fetch surfaces as the socket closing with
         // the reply unfinished — the one reliable disconnect signal
         // (onRequestAbort keys off req.aborted, dead since Node 16: it never
@@ -130,11 +130,11 @@ export function toolRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         let envelope: ReturnType<typeof ok> | ReturnType<typeof err>;
         try { envelope = ok(await def.execute(toolCtx, req.body ?? {})); }
         catch (error) { ({ status, body: envelope } = refusal(error)); }
-        // The result is the record's — unless the call was cut (an interrupt,
-        // a hang-up by the holder): a cut call has no result, and the driver
-        // writes the placeholder for it.
+        // The result is the step's — unless the call was cut (an interrupt,
+        // a hang-up by the holder): a cut call has no result; the step's
+        // close says so.
         const written = toolCallId && !abort.signal.aborted
-          ? await ctx.toolCalls.record(session.id, client, { toolCallId, toolName: def.name, input: req.body ?? {} }, envelope)
+          ? await ctx.steps.serverResult(session.id, client, { toolCallId, toolName: def.name, input: req.body ?? {} }, envelope)
           : null;
         end();
         return { status, body: written ? { ...envelope, record: written } : envelope };

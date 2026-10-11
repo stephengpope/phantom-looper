@@ -23,7 +23,7 @@ import type { ProjectRow, SessionRow } from '../storage/schema.js';
 import type { Sessions } from '../storage/Sessions.js';
 import type { Settings } from '../storage/Settings.js';
 import type { SessionEvents } from '../agents/SessionEvents.js';
-import type { ToolCalls } from '../agents/ToolCalls.js';
+import type { Steps } from '../agents/Steps.js';
 import type { Runners } from './Runners.js';
 import type { Job, TurnJobResult } from './protocol.js';
 import { scopeOf } from '../lib/scopes.js';
@@ -44,7 +44,7 @@ export class Turns {
     private readonly runners: Runners,
     private readonly settings: Settings,
     private readonly events: SessionEvents,
-    private readonly toolCalls: ToolCalls,
+    private readonly steps: Steps,
   ) {}
 
   /** Start `spec` on a runner for a session nobody holds. `locked`: someone
@@ -60,10 +60,9 @@ export class Turns {
   }
 
   /** Move `from`'s held turn to a runner. `lost`: `from` no longer held it.
-   *  Answers the moment the hold moved; the runner is sent the turn once no
-   *  server tool call is in flight on the session — a driver may leave mid
-   *  call, and the record must hold every result before the next driver
-   *  calls the model. */
+   *  Answers the moment the hold moved; the runner is sent the turn once
+   *  the step in flight is written — a driver may leave mid call, and the
+   *  record must be whole before the next driver calls the model. */
   async handoff(session: SessionRow, project: ProjectRow, from: string, spec: TurnSpec): Promise<{ runner: { id: string; name: string } } | 'no_runner' | 'lost'> {
     const runner = await this.runners.placeTurn(spec.actingFor.userId ?? null, spec.agentType);
     if (!runner) return 'no_runner';
@@ -73,9 +72,7 @@ export class Turns {
     // events, and the driver that let go must hear who holds it now.
     this.events.publish(session.id, runner.id, { event: 'lock', locked: true, by: runner.id, label: runner.name,
       agent: session.agent ?? null, expires_at: expires.toISOString() });
-    const open = this.toolCalls.inFlight(session.id);
-    if (open) log.info({ session: session.id, runner: runner.name, open }, 'hand-off waits for the tool calls in flight');
-    void this.toolCalls.settled(session.id).then(() => this.#dispatch(session, runner, spec, `handed off from ${from}`));
+    void this.steps.handoff(session.id).then(() => this.#dispatch(session, runner, spec, `handed off from ${from}`));
     return { runner: { id: runner.id, name: runner.name } };
   }
 

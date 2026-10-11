@@ -297,7 +297,8 @@ export abstract class Agent {
             system: ready.system, tools: ready.tools, terminal: ready.terminal, history: this.session.messages, maxSteps: ready.model.maxSteps,
             opening: words,
             handoff: () => this.#handoff,
-            recordedByServer: ready.recordedByServer,
+            serverTools: ready.serverTools,
+            filed: ready.filed,
             onDisconnect: (listener) => { this.#disconnectListeners.add(listener); return () => { this.#disconnectListeners.delete(listener); }; },
             // Mid tool calls: this side's stream closes first (its hold is
             // still its own), then the hold moves. Refused: the words go back
@@ -314,13 +315,15 @@ export abstract class Agent {
             loopSignal: () => this.#nextSignal(),
             pending: () => this.#sent(),
             afterStop: () => (this.#keepQueue || this.#closed ? [] : this.#sent()),
-            // Both appends are queued before the first await: the record
-            // keeps the order the turn made them in.
-            record: async (lines) => {
-              const partials = this.#flushPartials();
-              const added = await this.#session.append(lines);
-              await partials;
-              if (added.length) this.#emit('step', { messages: added, usage: this.session.usage });
+            // The api writes the steps; what it wrote is filed as it answers.
+            // A partial (a spoken reply cut short) goes out first, so the
+            // record keeps the order things happened in.
+            step: async (opening) => { await this.#flushPartials(); return this.#session.step(opening); },
+            result: (result) => this.#session.results([result]),
+            close: async (opening) => { await this.#flushPartials(); return this.#session.closeStep(opening); },
+            onWritten: (written) => {
+              const messages = written.lines.flatMap((line) => (line.type === 'message' ? [line.message] : []));
+              if (messages.length) this.#emit('step', { messages, usage: this.session.usage });
             },
             onPart: (part) => { feed.part(part); this.#emit('part', part); },
             onToolError: (name, error) => this.#emit('tool-error', { name, error }),
@@ -447,7 +450,7 @@ export abstract class Agent {
    *  it now), plan mode, the model, the prompt as stored, the tools. Null when a stop
    *  landed meanwhile — nothing was sent, nothing recorded, the queue
    *  untouched. */
-  async #prepare(start: TurnStart & { recordMoved: boolean }, signal: AbortSignal): Promise<{ model: ResolvedModel; system: SystemModelMessage[]; tools: Record<string, Tool>; terminal: string[]; recordedByServer: Set<string> } | null> {
+  async #prepare(start: TurnStart & { recordMoved: boolean }, signal: AbortSignal): Promise<{ model: ResolvedModel; system: SystemModelMessage[]; tools: Record<string, Tool>; terminal: string[]; serverTools: Set<string>; filed: Set<string> } | null> {
     try {
       const gained = await this.#session.makeCurrent(start.recordMoved, signal);
       if (gained) this.#emit('reloaded', { messages: this.session.messages, from: gained.from, added: gained.added, now: this.session.transcriptUpdatedAt });
@@ -459,15 +462,19 @@ export abstract class Agent {
       const { messages: system, uncached } = systemMessages(systemPromptBlocks(stored), model.spec.provider);
       if (uncached) this.#handlers.onNotice({ type: 'cache', text: `${uncached} system prompt block(s) beyond the first ${CACHED_BLOCKS} are not cached on ${model.spec.provider}` });
       this.#kits.add(serverToolKit(start.tools));
-      const { tools, terminal, recordedByServer } = await this.#kits.resolve({ backend: this.backend, sessionId: this.session.id, projectId: this.session.projectId,
+      // The call ids whose results the api filed itself this turn.
+      const filed = new Set<string>();
+      const { tools, terminal, serverTools } = await this.#kits.resolve({ backend: this.backend, sessionId: this.session.id, projectId: this.session.projectId,
         workspaceId: this.session.workspaceId, readonly: () => this.session.planMode,
-        // A line the api wrote for this turn (a server tool's result): filed
-        // as this side's own; the screen hears it as a step.
+        filed: (toolCallId) => { filed.add(toolCallId); },
+        // A step the api wrote for this turn (a server tool's answer carried
+        // it): filed as this side's own; the screen hears it as a step.
         recorded: (written) => {
           this.#session.adopt(written);
-          this.#emit('step', { messages: written.line.type === 'message' ? [written.line.message] : [], usage: this.session.usage });
+          const messages = written.lines.flatMap((line) => (line.type === 'message' ? [line.message] : []));
+          if (messages.length) this.#emit('step', { messages, usage: this.session.usage });
         } });
-      return { model, system, tools, terminal, recordedByServer };
+      return { model, system, tools, terminal, serverTools, filed };
     } catch (error) {
       if (signal.aborted) return null;
       throw error;
