@@ -23,7 +23,6 @@ import { RemoteHost } from '../runtime/RemoteHost.js';
 import type { WorkspaceHost } from '../runtime/WorkspaceHost.js';
 import type { Settings } from '../storage/Settings.js';
 import type { HostHello, HostLoad, Job, JobEvent } from './protocol.js';
-import { tooFull } from '../runtime/Disk.js';
 import { newId, type UpdateEvent } from '@phantom-agent-sdk/client';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { scopeOf } from '../lib/scopes.js';
@@ -155,18 +154,17 @@ export class Runners {
 
   /** Where a new workspace of `project` for `userId` goes. The tiers, in order: the user's own online
    *  hosts; shared online hosts; the backend host. Within a tier: a host
-   *  that cannot take a checkout — its disk under the sweep's floor, or it
-   *  cannot hold the project's disk limit — is not a candidate; the lowest
-   *  CPU wins; equal CPUs, one at random. A host that has not beaten yet
-   *  reads as idle. */
+   *  that cannot hold the project's disk limit is not a candidate; the
+   *  lowest CPU wins; equal CPUs, one at random. A host that has not beaten
+   *  yet reads as idle. Disk space is never a reason: keeping the disk under
+   *  the rule is the maintenance jobs' work, not placement's. */
   async place(project: ProjectRow, userId: string | null): Promise<WorkspaceHost> {
     const rows = await this.database.select().from(runners);
     const online = rows.filter((row) => this.#remote.get(row.id)?.online);
     const settings = this.opts.settings;
     const diskGb = settings ? await settings.resolve<number | null>('container_disk_gb', scopeOf(project)).catch(() => null) : null;
-    const pct = settings ? Number(await settings.resolve('disk_cleanup_percent').catch(() => 0)) : 0;
     const loadOf = (row: RunnerRow) => this.#remote.get(row.id)!.load;
-    const able = online.filter((row) => runsSessions(row.facts) && (!diskGb || row.facts.diskSupport === null) && !(loadOf(row) && tooFull(loadOf(row)!, pct)));
+    const able = online.filter((row) => runsSessions(row.facts) && (!diskGb || row.facts.diskSupport === null));
     const cpuOf = (row: RunnerRow) => loadOf(row)?.cpu ?? 0;
     const least = (tier: RunnerRow[]): RunnerRow | undefined => {
       if (!tier.length) return undefined;
