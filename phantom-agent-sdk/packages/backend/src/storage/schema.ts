@@ -355,11 +355,9 @@ export const media = phantomAgentSdk.table('media', {
   name: text('name').notNull(),
   mimeType: text('mime_type').notNull(),
   size: bigint('size', { mode: 'number' }).notNull(),
-  status: text('status').notNull().default('uploading').$type<'uploading' | 'ready'>(),
   endpoint: text('endpoint').notNull(),
   bucket: text('bucket').notNull(),
   key: text('key').notNull(),
-  uploadId: text('upload_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

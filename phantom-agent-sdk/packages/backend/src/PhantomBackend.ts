@@ -383,7 +383,6 @@ export class PhantomBackend {
       await idleBackupSweep(this.projects, this.sessions, this.git.sync).catch((error) => log.error({ err: errStr(error) }, 'idle backup sweep threw'));
       const idleMs = await this.settings.resolve<number>('container_idle_ms').catch(() => 30 * 60_000);
       await this.sessionContainers.reap(Number(idleMs), (idleMs) => this.idleContainerWorkspaces(idleMs)).catch((error) => log.error({ err: errStr(error) }, 'container reap threw'));
-      await this.media.sweep().catch((error) => log.error({ err: errStr(error) }, 'media sweep threw'));
       await pressureSweep(this.settings, this.projects, this.sessions, this.runners, this.sessionContainers, this.git.sync, (ids) => this.busyWorkspaces(ids))
         .catch((error) => log.error({ err: errStr(error) }, 'pressure sweep threw'));
       return Number(await this.settings.resolve<number>('maintenance_interval_ms').catch(() => 60_000));

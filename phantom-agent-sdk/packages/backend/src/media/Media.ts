@@ -11,14 +11,16 @@
 // on it). Checksums are left to the provider (`WHEN_REQUIRED`): the AWS
 // SDK's default checksum headers break most non-AWS providers.
 //
-// Three ways in, one way to `ready`:
-//   - upload(stream)   — through this server, streamed (lib-storage)
-//   - createUpload()   — straight from the browser: one presigned PUT, or a
-//                        presigned multipart upload for a large file
-//   - complete()       — the browser says it is done
-// Every one ends in #verify: the object's real size from the provider, its
-// type from its first bytes (file-type), both checked against the limits.
-// A file that fails is deleted. Nothing trusts what the uploader claimed.
+// Two ways in, one way to a row:
+//   - upload(stream)            — through this server, streamed (lib-storage)
+//   - createUpload() + complete() — straight from the browser: one presigned
+//                                 PUT, or a presigned multipart upload for a
+//                                 large file, then the browser says it is done
+// Every one ends in #record: the object's real size from the provider, its
+// type from its first bytes (file-type), both checked against the limits —
+// and only THEN the row, ready. A file that fails is deleted. An upload the
+// browser never finished leaves no row at all: its bytes are the bucket's
+// to expire. Nothing trusts what the uploader claimed.
 //
 // Out: links — presigned GETs, short-lived, every file private. A link is
 // a signature computed here (no call to the provider), so a page's worth
@@ -29,7 +31,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { and, desc, eq, lt, type SQL } from 'drizzle-orm';
+import { and, desc, eq, type SQL } from 'drizzle-orm';
 import {
   S3Client, HeadBucketCommand, HeadObjectCommand, GetObjectCommand, PutObjectCommand, DeleteObjectCommand,
   CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand, AbortMultipartUploadCommand,
@@ -52,7 +54,7 @@ const log = logger('media');
 
 export class MediaError extends Error {
   constructor(readonly code: 'not_configured' | 'not_found' | 'invalid_args' | 'too_large' | 'type_not_allowed'
-    | 'not_uploading' | 'storage_changed' | 'storage_failed', message: string) { super(message); this.name = 'MediaError'; }
+    | 'storage_changed' | 'storage_failed', message: string) { super(message); this.name = 'MediaError'; }
 }
 
 /** Who a file belongs to. `organizationId` null = the service role's (SERVICE_ROLE_ORGANIZATION). */
@@ -66,7 +68,7 @@ export interface MediaOwner {
 /** How a browser sends the bytes: one PUT, or one PUT per part. */
 export type UploadPlan =
   | { mode: 'single'; url: string; headers: Record<string, string> }
-  | { mode: 'multipart'; partSize: number; parts: { partNumber: number; url: string }[] };
+  | { mode: 'multipart'; uploadId: string; partSize: number; parts: { partNumber: number; url: string }[] };
 
 export interface MediaLink { id: string; url: string; expiresAt: string }
 
@@ -77,14 +79,15 @@ const PART_SIZE = 16 * 1024 ** 2;
 const MAX_PARTS = 10_000;
 /** How long a browser has to start sending once it has its upload URLs. */
 const UPLOAD_URL_SECONDS = 3600;
-/** An upload not completed in this long is abandoned: swept with its bytes. */
-const ABANDONED_MS = 24 * 3600_000;
-/** What #verify reads to tell the type — file-type's own sample size. */
+/** What #record reads to tell the type — file-type's own sample size. */
 const SNIFF_BYTES = 4100;
 /** Types a browser may show in place; anything else downloads. */
 const INLINE = /^(image\/(?!svg)|video\/|audio\/|application\/pdf$)/;
 
 interface Storage { endpoint: string; region: string; bucket: string; accessKeyId: string; secretAccessKey: string }
+/** A file on its way in: where its bytes go, before any row exists. */
+interface Incoming { id: string; key: string; name: string; organizationId: string; storage: Storage }
+const isId = (id: string): boolean => /^[0-9a-z]{26}$/i.test(id);
 
 const STORAGE_KEYS = ['media_endpoint', 'media_region', 'media_bucket'] as const;
 
@@ -197,16 +200,16 @@ export class Media {
     return row;
   }
 
-  /** Ready files, newest first. Each filter given narrows; `organizationId` null = the service role's. */
+  /** Files, newest first. Each filter given narrows; `organizationId` null = the service role's. */
   async list(filter: { organizationId?: string | null; projectId?: string; userId?: string; limit?: number } = {}): Promise<MediaRow[]> {
-    const where: SQL[] = [eq(media.status, 'ready')];
+    const where: SQL[] = [];
     if (filter.organizationId !== undefined) where.push(eq(media.organizationId, filter.organizationId ?? SERVICE_ROLE_ORGANIZATION));
     if (filter.projectId) where.push(eq(media.projectId, filter.projectId));
     if (filter.userId) where.push(eq(media.userId, filter.userId));
-    return this.database.select().from(media).where(and(...where)).orderBy(desc(media.createdAt)).limit(Math.min(filter.limit ?? 100, 1000));
+    return this.database.select().from(media).where(where.length ? and(...where) : undefined).orderBy(desc(media.createdAt)).limit(Math.min(filter.limit ?? 100, 1000));
   }
 
-  /** Files of an organization, any status — what refuses its deletion. */
+  /** Files of an organization — what refuses its deletion. */
   async ofOrganization(organizationId: string): Promise<number> {
     return (await this.database.select({ id: media.id }).from(media).where(eq(media.organizationId, organizationId)).limit(1)).length;
   }
@@ -215,13 +218,13 @@ export class Media {
 
   /** Upload through this server: the stream goes to the bucket as it
    *  arrives (multipart, 16 MiB parts, four in flight — memory stays
-   *  bounded), counted against the size limit; then verified. `signal`
-   *  aborts it (the uploader hung up). */
+   *  bounded), counted against the size limit; then checked and recorded.
+   *  `signal` aborts it (the uploader hung up). */
   async upload(body: Readable, options: { name: string; owner: MediaOwner; mimeType?: string; size?: number; signal?: AbortSignal }): Promise<MediaRow> {
     const limits = await this.#limits(options.owner.organizationId);
     if (options.size !== undefined && options.size > limits.maxBytes) throw tooLarge(options.size, limits.maxBytes);
-    const row = await this.#create(options.owner, options.name, options.mimeType ?? 'application/octet-stream', options.size ?? 0);
-    const storage = await this.#storageOf(row);
+    const file = await this.#incoming(options.owner, newId(), options.name);
+    const mimeType = options.mimeType ?? 'application/octet-stream';
     try {
       let counted = 0;
       const counter = new Transform({
@@ -231,8 +234,8 @@ export class Media {
         },
       });
       const upload = new Upload({
-        client: await this.#client(storage), partSize: PART_SIZE, queueSize: 4, leavePartsOnError: false,
-        params: { Bucket: row.bucket, Key: row.key, Body: body.pipe(counter), ContentType: row.mimeType },
+        client: await this.#client(file.storage), partSize: PART_SIZE, queueSize: 4, leavePartsOnError: false,
+        params: { Bucket: file.storage.bucket, Key: file.key, Body: body.pipe(counter), ContentType: mimeType },
       });
       body.on('error', (error) => counter.destroy(error));
       const failed = new Promise<never>((_resolve, reject) => counter.on('error', reject));
@@ -247,9 +250,9 @@ export class Media {
       } finally {
         options.signal?.removeEventListener('abort', stop);
       }
-      return await this.#verify(row, storage, null);
+      return await this.#record(file, options.owner, mimeType, null);
     } catch (error) {
-      await this.#discard(row, storage);
+      await this.#remove(file.storage, file.key);
       if (error instanceof MediaError) throw error;
       throw new MediaError('storage_failed', `upload of ${options.name} failed: ${providerWords(error)}`);
     }
@@ -262,122 +265,131 @@ export class Media {
     return this.upload(fs.createReadStream(filePath), { name: options.name ?? path.basename(filePath), owner: options.owner, mimeType: options.mimeType, size: stat.size });
   }
 
-  /** Start a browser upload: the row, and the presigned URLs the browser
-   *  sends the bytes to. The size and type are checked now and again on
-   *  complete; each URL is signed for its exact length, so the provider
+  /** Start a browser upload: the file's id, and the presigned URLs the
+   *  browser sends the bytes to. No row yet — the row is `complete`'s, once
+   *  the bytes are in and checked. The size and type are checked now and
+   *  again then; each URL is signed for its exact length, so the provider
    *  refuses more bytes than were declared. */
-  async createUpload(options: { name: string; size: number; mimeType: string; owner: MediaOwner }): Promise<{ media: MediaRow; upload: UploadPlan }> {
+  async createUpload(options: { name: string; size: number; mimeType: string; owner: MediaOwner }): Promise<{ id: string; upload: UploadPlan }> {
     const limits = await this.#limits(options.owner.organizationId);
     if (!Number.isInteger(options.size) || options.size < 1) throw new MediaError('invalid_args', 'size must be the file\'s length in bytes');
     if (options.size > limits.maxBytes) throw tooLarge(options.size, limits.maxBytes);
     if (!typeAllowed(options.mimeType, limits.allowed)) throw notAllowed(options.mimeType, limits.allowed);
-    const row = await this.#create(options.owner, options.name, options.mimeType, options.size);
-    const storage = await this.#storageOf(row);
+    const file = await this.#incoming(options.owner, newId(), options.name);
     try {
-      const client = await this.#client(storage);
+      const client = await this.#client(file.storage);
       if (options.size <= SINGLE_PUT_MAX) {
-        const url = await getSignedUrl(client, new PutObjectCommand({ Bucket: row.bucket, Key: row.key, ContentType: row.mimeType, ContentLength: row.size }),
+        const url = await getSignedUrl(client, new PutObjectCommand({ Bucket: file.storage.bucket, Key: file.key, ContentType: options.mimeType, ContentLength: options.size }),
           { expiresIn: UPLOAD_URL_SECONDS, signableHeaders: new Set(['content-type']) });
-        return { media: row, upload: { mode: 'single', url, headers: { 'content-type': row.mimeType } } };
+        return { id: file.id, upload: { mode: 'single', url, headers: { 'content-type': options.mimeType } } };
       }
-      const partSize = Math.max(PART_SIZE, Math.ceil(row.size / MAX_PARTS / 1024 ** 2) * 1024 ** 2);
-      const count = Math.ceil(row.size / partSize);
-      const created = await client.send(new CreateMultipartUploadCommand({ Bucket: row.bucket, Key: row.key, ContentType: row.mimeType }));
+      const partSize = Math.max(PART_SIZE, Math.ceil(options.size / MAX_PARTS / 1024 ** 2) * 1024 ** 2);
+      const count = Math.ceil(options.size / partSize);
+      const created = await client.send(new CreateMultipartUploadCommand({ Bucket: file.storage.bucket, Key: file.key, ContentType: options.mimeType }));
       if (!created.UploadId) throw new Error('the provider gave no upload id');
-      await this.database.update(media).set({ uploadId: created.UploadId, updatedAt: new Date() }).where(eq(media.id, row.id));
       const parts = await Promise.all(Array.from({ length: count }, async (_unused, i) => ({
         partNumber: i + 1,
-        url: await getSignedUrl(client, new UploadPartCommand({ Bucket: row.bucket, Key: row.key, UploadId: created.UploadId, PartNumber: i + 1,
-          ContentLength: i + 1 < count ? partSize : row.size - partSize * (count - 1) }), { expiresIn: UPLOAD_URL_SECONDS }),
+        url: await getSignedUrl(client, new UploadPartCommand({ Bucket: file.storage.bucket, Key: file.key, UploadId: created.UploadId, PartNumber: i + 1,
+          ContentLength: i + 1 < count ? partSize : options.size - partSize * (count - 1) }), { expiresIn: UPLOAD_URL_SECONDS }),
       })));
-      return { media: { ...row, uploadId: created.UploadId }, upload: { mode: 'multipart', partSize, parts } };
+      return { id: file.id, upload: { mode: 'multipart', uploadId: created.UploadId, partSize, parts } };
     } catch (error) {
-      await this.#discard(row, storage);
       throw new MediaError('storage_failed', `could not start the upload of ${options.name}: ${providerWords(error)}`);
     }
   }
 
   /** The browser sent everything: finish a multipart upload (its parts'
-   *  ETags, as each part's PUT answered them), then verify. */
-  async complete(id: string, options: { organizationId?: string | null; parts?: { partNumber: number; etag: string }[] } = {}): Promise<MediaRow> {
-    const row = await this.get(id, options.organizationId);
-    if (row.status !== 'uploading') throw new MediaError('not_uploading', `${row.name} is already uploaded`);
-    const storage = await this.#storageOf(row);
-    if (row.uploadId) {
+   *  ETags, as each part's PUT answered them), check the object, and only
+   *  then write the row. What the browser says about the file — its name,
+   *  declared size and type — is what it said at the start; the size and
+   *  type are read off the object itself. */
+  async complete(id: string, options: { owner: MediaOwner; name: string; size: number; mimeType: string; uploadId?: string; parts?: { partNumber: number; etag: string }[] }): Promise<MediaRow> {
+    if (!isId(id)) throw new MediaError('invalid_args', `${id} is not an upload id`);
+    const limits = await this.#limits(options.owner.organizationId);
+    if (!Number.isInteger(options.size) || options.size < 1) throw new MediaError('invalid_args', 'size must be the file\'s length in bytes');
+    if (options.size > limits.maxBytes) throw tooLarge(options.size, limits.maxBytes);
+    if (!typeAllowed(options.mimeType, limits.allowed)) throw notAllowed(options.mimeType, limits.allowed);
+    const file = await this.#incoming(options.owner, id, options.name);
+    if (options.uploadId) {
       if (!options.parts?.length) throw new MediaError('invalid_args', 'a multipart upload completes with its parts: [{ partNumber, etag }]');
       try {
-        const client = await this.#client(storage);
-        await client.send(new CompleteMultipartUploadCommand({ Bucket: row.bucket, Key: row.key, UploadId: row.uploadId,
+        const client = await this.#client(file.storage);
+        await client.send(new CompleteMultipartUploadCommand({ Bucket: file.storage.bucket, Key: file.key, UploadId: options.uploadId,
           MultipartUpload: { Parts: [...options.parts].sort((a, b) => a.partNumber - b.partNumber).map((part) => ({ PartNumber: part.partNumber, ETag: part.etag })) } }));
       } catch (error) {
-        throw new MediaError('storage_failed', `could not finish the upload of ${row.name}: ${providerWords(error)}`);
+        await this.#remove(file.storage, file.key, options.uploadId);
+        throw new MediaError('storage_failed', `could not finish the upload of ${file.name}: ${providerWords(error)}`);
       }
     }
     try {
-      return await this.#verify(row, storage, row.size);
+      return await this.#record(file, options.owner, options.mimeType, options.size);
     } catch (error) {
-      await this.#discard(row, storage);
+      await this.#remove(file.storage, file.key);
       throw error;
     }
   }
 
-  /** The real size and type, from the provider and the file's first bytes;
-   *  `ready` when both pass. `expectedSize`: what a browser upload declared. */
-  async #verify(row: MediaRow, storage: Storage, expectedSize: number | null): Promise<MediaRow> {
-    const limits = await this.#limits(row.organizationId);
-    const client = await this.#client(storage);
+  /** The browser gave up mid-way: its bytes and parts go. No row ever existed. */
+  async abandon(id: string, options: { owner: MediaOwner; uploadId?: string }): Promise<void> {
+    if (!isId(id)) throw new MediaError('invalid_args', `${id} is not an upload id`);
+    const file = await this.#incoming(options.owner, id, 'upload');
+    await this.#remove(file.storage, file.key, options.uploadId);
+  }
+
+  /** The object as it really is — its size from the provider, its type
+   *  from its first bytes — checked against the limits, then the row.
+   *  `expectedSize`: what a browser upload declared, null through the server. */
+  async #record(file: Incoming, owner: MediaOwner, claimedType: string, expectedSize: number | null): Promise<MediaRow> {
+    const limits = await this.#limits(owner.organizationId);
+    const client = await this.#client(file.storage);
     let size: number;
     let head: Uint8Array;
     try {
-      size = Number((await client.send(new HeadObjectCommand({ Bucket: row.bucket, Key: row.key }))).ContentLength ?? 0);
-      const sample = await client.send(new GetObjectCommand({ Bucket: row.bucket, Key: row.key, Range: `bytes=0-${SNIFF_BYTES - 1}` }));
+      size = Number((await client.send(new HeadObjectCommand({ Bucket: file.storage.bucket, Key: file.key }))).ContentLength ?? 0);
+      const sample = await client.send(new GetObjectCommand({ Bucket: file.storage.bucket, Key: file.key, Range: `bytes=0-${SNIFF_BYTES - 1}` }));
       head = sample.Body ? await sample.Body.transformToByteArray() : new Uint8Array();
     } catch (error) {
-      throw new MediaError('storage_failed', `could not check ${row.name}: ${providerWords(error)}`);
+      throw new MediaError('storage_failed', `could not check ${file.name}: ${providerWords(error)}`);
     }
-    if (expectedSize !== null && size !== expectedSize) throw new MediaError('invalid_args', `${row.name} arrived as ${size} bytes, not the ${expectedSize} declared`);
+    if (expectedSize !== null && size !== expectedSize) throw new MediaError('invalid_args', `${file.name} arrived as ${size} bytes, not the ${expectedSize} declared`);
     if (size > limits.maxBytes) throw tooLarge(size, limits.maxBytes);
-    if (size === 0) throw new MediaError('invalid_args', `${row.name} is empty`);
+    if (size === 0) throw new MediaError('invalid_args', `${file.name} is empty`);
     // Binary formats announce themselves in their first bytes. Text cannot:
     // a text/* claim stands only when the bytes are text; anything else
     // unrecognised is unknown binary.
     const detected = (await fileTypeFromBuffer(head))?.mime;
-    const mimeType = detected ?? (row.mimeType.startsWith('text/') && isText(head) ? row.mimeType : 'application/octet-stream');
+    const mimeType = detected ?? (claimedType.startsWith('text/') && isText(head) ? claimedType : 'application/octet-stream');
     if (!typeAllowed(mimeType, limits.allowed)) throw notAllowed(mimeType, limits.allowed);
-    const [ready] = await this.database.update(media).set({ status: 'ready', size, mimeType, uploadId: null, updatedAt: new Date() })
-      .where(eq(media.id, row.id)).returning();
-    log.info({ media: row.id, size, mimeType }, 'media ready');
-    return ready;
-  }
-
-  async #create(owner: MediaOwner, name: string, mimeType: string, size: number): Promise<MediaRow> {
-    const trimmed = name.trim();
-    if (!trimmed || trimmed.length > 255) throw new MediaError('invalid_args', 'name must be 1–255 characters');
-    const storage = await this.#storageFor(owner.organizationId);
-    const id = newId();
-    // The organization's namespace; the file's own id. The user's name for
-    // it is in the row, never in the key.
-    const organizationId = owner.organizationId ?? SERVICE_ROLE_ORGANIZATION;
-    const key = `org/${organizationId}/${id}`;
     const [row] = await this.database.insert(media).values({
-      id, organizationId, userId: owner.userId ?? null, projectId: owner.projectId ?? null, sessionId: owner.sessionId ?? null,
-      name: trimmed, mimeType, size, endpoint: storage.endpoint, bucket: storage.bucket, key,
+      id: file.id, organizationId: file.organizationId, userId: owner.userId ?? null, projectId: owner.projectId ?? null, sessionId: owner.sessionId ?? null,
+      name: file.name, mimeType, size, endpoint: file.storage.endpoint, bucket: file.storage.bucket, key: file.key,
     }).returning();
+    log.info({ media: row.id, size, mimeType }, 'media ready');
     return row;
   }
 
-  /** The bytes and the row of a file that will not become ready. Best
-   *  effort at the provider: the sweep and the row's absence settle the rest. */
-  async #discard(row: MediaRow, storage: Storage): Promise<void> {
+  /** Where a file's bytes go: the organization's storage, and a key in its
+   *  namespace off the file's own id. The user's name for it goes in the
+   *  row, never in the key. */
+  async #incoming(owner: MediaOwner, id: string, name: string): Promise<Incoming> {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed.length > 255) throw new MediaError('invalid_args', 'name must be 1–255 characters');
+    const storage = await this.#storageFor(owner.organizationId);
+    const organizationId = owner.organizationId ?? SERVICE_ROLE_ORGANIZATION;
+    return { id, key: `org/${organizationId}/${id}`, name: trimmed, organizationId, storage };
+  }
+
+  /** The bytes of a file that will not become a row — and, for a multipart
+   *  upload, its parts. Best effort at the provider: an object left behind
+   *  is the bucket's to expire. */
+  async #remove(storage: Storage, key: string, uploadId?: string): Promise<void> {
     try {
       const client = await this.#client(storage);
-      const [current] = await this.database.select({ uploadId: media.uploadId }).from(media).where(eq(media.id, row.id));
-      if (current?.uploadId) await client.send(new AbortMultipartUploadCommand({ Bucket: row.bucket, Key: row.key, UploadId: current.uploadId })).catch(() => {});
-      await client.send(new DeleteObjectCommand({ Bucket: row.bucket, Key: row.key }));
+      if (uploadId) await client.send(new AbortMultipartUploadCommand({ Bucket: storage.bucket, Key: key, UploadId: uploadId })).catch(() => {});
+      await client.send(new DeleteObjectCommand({ Bucket: storage.bucket, Key: key }));
     } catch (error) {
-      log.warn({ media: row.id, err: errStr(error) }, 'could not remove the bytes of a discarded media file');
+      log.warn({ key, err: errStr(error) }, 'could not remove the bytes of a discarded media file');
     }
-    await this.database.delete(media).where(eq(media.id, row.id));
   }
 
   async #limits(organizationId: string | null): Promise<{ maxBytes: number; allowed: string[] }> {
@@ -388,14 +400,13 @@ export class Media {
 
   // ── out ──────────────────────────────────────────────────────────────
 
-  /** Download links for ready files, in the order asked. `seconds`: how
+  /** Download links, in the order asked. `seconds`: how
    *  long they work (default media_link_seconds, at most
    *  media_link_max_seconds). Another organization's file is not found. */
   async links(ids: string[], options: { organizationId?: string | null; seconds?: number } = {}): Promise<MediaLink[]> {
     const out: MediaLink[] = [];
     for (const id of ids) {
       const row = await this.get(id, options.organizationId);
-      if (row.status !== 'ready') throw new MediaError('not_found', `${row.name} is still uploading`);
       const scope = row.organizationId ? { organizationId: row.organizationId } : {};
       const { media_link_seconds: fallback, media_link_max_seconds: max } = await this.settings.resolveMany(['media_link_seconds', 'media_link_max_seconds'], scope);
       const seconds = options.seconds ?? Number(fallback);
@@ -417,11 +428,10 @@ export class Media {
     return out;
   }
 
-  /** A ready file onto this server's disk, into `dir`, named
-   *  `<id>_<name>`. Answers the path. */
+  /** A file onto this server's disk, into `dir`, named `<id>_<name>`.
+   *  Answers the path. */
   async download(id: string, dir: string, organizationId?: string | null): Promise<string> {
     const row = await this.get(id, organizationId);
-    if (row.status !== 'ready') throw new MediaError('not_found', `${row.name} is still uploading`);
     const client = await this.#client(await this.#storageOf(row));
     await fs.promises.mkdir(dir, { recursive: true });
     const target = path.join(dir, `${row.id}_${row.name.replace(/[^\w.-]+/g, '_')}`);
@@ -436,31 +446,17 @@ export class Media {
     return target;
   }
 
-  /** Remove a file: its bytes, then its row. An unfinished upload is aborted. */
+  /** Remove a file: its bytes, then its row. */
   async delete(id: string, organizationId?: string | null): Promise<void> {
     const row = await this.get(id, organizationId);
     const storage = await this.#storageOf(row);
     const client = await this.#client(storage);
     try {
-      if (row.uploadId) await client.send(new AbortMultipartUploadCommand({ Bucket: row.bucket, Key: row.key, UploadId: row.uploadId })).catch(() => {});
       await client.send(new DeleteObjectCommand({ Bucket: row.bucket, Key: row.key }));
     } catch (error) {
       throw new MediaError('storage_failed', `could not delete ${row.name}: ${providerWords(error)}`);
     }
     await this.database.delete(media).where(eq(media.id, row.id));
-  }
-
-  /** Uploads never completed (a browser closed mid-way): gone after a day,
-   *  bytes and parts with them. Driven from the maintenance loop. */
-  async sweep(): Promise<void> {
-    const stale = await this.database.select().from(media)
-      .where(and(eq(media.status, 'uploading'), lt(media.createdAt, new Date(Date.now() - ABANDONED_MS)))).limit(100);
-    for (const row of stale) {
-      const storage = await this.#storageOf(row).catch(() => null);
-      if (storage) await this.#discard(row, storage);
-      else await this.database.delete(media).where(eq(media.id, row.id));
-      log.info({ media: row.id }, 'abandoned upload swept');
-    }
   }
 
   // ── setup ────────────────────────────────────────────────────────────

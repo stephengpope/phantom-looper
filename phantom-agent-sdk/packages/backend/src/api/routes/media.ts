@@ -2,11 +2,12 @@
 // service role's routes, like every /api route; user space builds its own
 // users' routes under /app on backend.media with its own rules.
 //
-//   GET    /media                    ?organization=&project=&user=&limit=  → ready files
+//   GET    /media                    ?organization=&project=&user=&limit=  → files
 //   GET    /media/:id                                                     → one file
 //   POST   /media                    raw bytes (application/octet-stream) ?name=&type=&organization=&project=&user=
-//   POST   /media/uploads            { name, size, type, organization?, project?, user? } → { media, upload }
-//   POST   /media/:id/complete       { parts? }                           → the file, ready
+//   POST   /media/uploads            { name, size, type, organization?, project?, user? } → { id, upload }
+//   POST   /media/uploads/:id/complete  { name, size, type, upload_id?, parts?, organization?, project?, user? } → the file
+//   DELETE /media/uploads/:id        ?upload_id=&organization=             a direct upload given up on
 //   POST   /media/links              { ids, seconds? }                    → { links }
 //   GET    /media/:id/content        ?seconds=                            → 302 to a link
 //   DELETE /media/:id
@@ -28,7 +29,7 @@ type OwnerQuery = { organization?: string; project?: string; user?: string };
 
 const STATUS: Record<MediaError['code'], number> = {
   not_configured: 409, not_found: 404, invalid_args: 400, too_large: 413, type_not_allowed: 415,
-  not_uploading: 409, storage_changed: 409, storage_failed: 502,
+  storage_changed: 409, storage_failed: 502,
 };
 
 function refuse(reply: FastifyReply, error: unknown) {
@@ -71,7 +72,7 @@ export function mediaRoutes(app: FastifyInstance, backend: PhantomBackend) {
   });
 
   app.post<{ Body: OwnerQuery & { name: string; size: number; type: string } }>('/media/uploads', { schema: { ...TAG, summary: 'Start a direct upload',
-    description: 'For a browser uploading straight to storage: returns the file record and where to send the bytes (several addresses, for a large file).',
+    description: 'For a browser uploading straight to storage: returns the upload\'s id and where to send the bytes (several addresses, for a large file). Nothing is recorded until complete.',
     body: { type: 'object', required: ['name', 'size', 'type'], additionalProperties: false, properties: {
       ...ownerProps, name: { type: 'string', minLength: 1, maxLength: 255 }, size: { type: 'integer', minimum: 1 }, type: { type: 'string', minLength: 3 } } } } },
   async (req, reply) => {
@@ -81,13 +82,26 @@ export function mediaRoutes(app: FastifyInstance, backend: PhantomBackend) {
     } catch (error) { return refuse(reply, error); }
   });
 
-  app.post<{ Params: { id: string }; Body: { parts?: { partNumber: number; etag: string }[] } }>('/media/:id/complete', { schema: { ...TAG, summary: 'Finish a direct upload',
-    description: 'Called once a direct upload\'s bytes are sent. Checks the file and marks it ready.',
+  app.post<{ Params: { id: string }; Body: OwnerQuery & { name: string; size: number; type: string; upload_id?: string; parts?: { partNumber: number; etag: string }[] } }>('/media/uploads/:id/complete', { schema: { ...TAG, summary: 'Finish a direct upload',
+    description: 'Called once a direct upload\'s bytes are sent, with what was declared at the start. Checks the file and records it.',
     params: idParam,
-    body: { type: 'object', additionalProperties: false, properties: { parts: { type: 'array', items: { type: 'object', required: ['partNumber', 'etag'],
-      additionalProperties: false, properties: { partNumber: { type: 'integer', minimum: 1, maximum: 10000 }, etag: { type: 'string', minLength: 1 } } } } } } } },
+    body: { type: 'object', required: ['name', 'size', 'type'], additionalProperties: false, properties: {
+      ...ownerProps, name: { type: 'string', minLength: 1, maxLength: 255 }, size: { type: 'integer', minimum: 1 }, type: { type: 'string', minLength: 3 },
+      upload_id: { type: 'string', minLength: 1, description: 'The multipart upload\'s id, as the start answered it.' },
+      parts: { type: 'array', items: { type: 'object', required: ['partNumber', 'etag'],
+        additionalProperties: false, properties: { partNumber: { type: 'integer', minimum: 1, maximum: 10000 }, etag: { type: 'string', minLength: 1 } } } } } } } },
   async (req, reply) => {
-    try { return ok(await backend.media.complete(req.params.id, { parts: req.body?.parts })); } catch (error) { return refuse(reply, error); }
+    try {
+      return ok(await backend.media.complete(req.params.id, { owner: ownerOf(req.body), name: req.body.name, size: req.body.size, mimeType: req.body.type,
+        uploadId: req.body.upload_id, parts: req.body.parts }));
+    } catch (error) { return refuse(reply, error); }
+  });
+  app.delete<{ Params: { id: string }; Querystring: { upload_id?: string; organization?: string } }>('/media/uploads/:id', { schema: { ...TAG, summary: 'Give up a direct upload',
+    description: 'A direct upload the sender will not finish: its bytes and parts are removed.',
+    params: idParam, querystring: { type: 'object', properties: { upload_id: { type: 'string', minLength: 1 }, organization: ownerProps.organization } } } },
+  async (req, reply) => {
+    try { await backend.media.abandon(req.params.id, { owner: { organizationId: req.query.organization ?? null }, uploadId: req.query.upload_id }); return ok({}); }
+    catch (error) { return refuse(reply, error); }
   });
 
   app.post<{ Body: { ids: string[]; seconds?: number } }>('/media/links', { schema: { ...TAG, summary: 'Get download links',
