@@ -161,13 +161,14 @@ RUN curl -fsSL https://sh.rustup.rs \
 # ffmpeg 9 as a static binary from BtbN/FFmpeg-Builds — the standard source for
 # a current ffmpeg on Debian (whose package is 7.1 from 2024: no animated WebP,
 # VVC still experimental, two years of fixes behind). Static = every codec
-# built in, no library conflicts with the apt tree. Pinned to one autobuild
-# release AND one asset name (the "latest" assets float within a branch).
+# built in, no library conflicts with the apt tree. BtbN is a nightly
+# autobuild: its dated releases are deleted after ~2 weeks, so a dated pin
+# 404s once the layer cache misses. The `latest` release's branch assets are
+# the only permanent URLs — pinned to the 9.0 branch, floating within it.
 # whisper (faster-whisper) and imagemagick call `ffmpeg` on PATH — they see it.
-ARG FFMPEG_BUILD=autobuild-2026-09-26-13-03
-ARG FFMPEG_ASSET=ffmpeg-n9.0.2-10-g51c4a23d74
+ARG FFMPEG_BRANCH=n9.0
 RUN case "${TARGETARCH}" in amd64) a=linux64 ;; arm64) a=linuxarm64 ;; *) exit 1 ;; esac \
-  && curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/${FFMPEG_BUILD}/${FFMPEG_ASSET}-${a}-gpl-9.0.tar.xz" \
+  && curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-${FFMPEG_BRANCH}-latest-${a}-gpl-9.0.tar.xz" \
       | tar -C /usr/local/bin -xJ --strip-components=2 --wildcards '*/bin/ffmpeg' '*/bin/ffprobe'
 
 # Python versions via uv: prebuilt standalone CPython, no compiling, and the
