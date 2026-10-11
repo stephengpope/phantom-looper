@@ -30,12 +30,49 @@ const log = logger('tool-calls');
  *  record as it stands after it. */
 export interface WrittenLine { line: TranscriptLine; lines: number; updated_at: string }
 
+/** What a tool route answers: the status and the body it sends. */
+export interface ToolAnswer { status: number; body: unknown }
+
+/** How many answered call ids a session keeps (per process). A caller's
+ *  repeat of a call comes right after the original; this is ample. */
+const ANSWERS_KEPT = 32;
+
 export class ToolCalls {
   readonly #inFlight = new Map<string, number>();
   readonly #waiters = new Map<string, Array<() => void>>();
   readonly #writes = new Map<string, Promise<unknown>>();
+  /** Per session, by call id: the answer this process made (or is making)
+   *  for it — insertion-ordered, the oldest dropped past ANSWERS_KEPT. */
+  readonly #answers = new Map<string, Map<string, Promise<ToolAnswer>>>();
 
   constructor(private readonly sessions: Sessions, private readonly events: SessionEvents) {}
+
+  /** A CALL ID IS RUN ONCE. The first request for an id runs `answer` and
+   *  its outcome is the id's; a later request for the same id (a caller
+   *  that retried a slow or timed-out call) gets that same answer, in
+   *  flight or done — the tool is never run again and the record never
+   *  takes a second result for the call. An `answer` that throws (the
+   *  route's own failure, nothing recorded) is forgotten, so the id can be
+   *  tried afresh. */
+  claim(sessionId: string, toolCallId: string, answer: () => Promise<ToolAnswer>): Promise<ToolAnswer> {
+    const answers = this.#answers.get(sessionId) ?? new Map<string, Promise<ToolAnswer>>();
+    this.#answers.set(sessionId, answers);
+    const prior = answers.get(toolCallId);
+    if (prior) {
+      log.warn({ session: sessionId, call: toolCallId }, 'tool call repeated — answered from the first run, not run again');
+      return prior;
+    }
+    const made = answer().catch((error: unknown) => {
+      if (answers.get(toolCallId) === made) answers.delete(toolCallId);
+      throw error;
+    });
+    answers.set(toolCallId, made);
+    while (answers.size > ANSWERS_KEPT) answers.delete(answers.keys().next().value!);
+    return made;
+  }
+
+  /** The turn ended: its call ids are done with (a new turn never repeats one). */
+  forget(sessionId: string): void { this.#answers.delete(sessionId); }
 
   /** A server tool call began on the session. Returns its `end`. */
   begin(sessionId: string): () => void {

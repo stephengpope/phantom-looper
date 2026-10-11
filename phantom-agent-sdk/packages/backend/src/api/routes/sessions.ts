@@ -778,6 +778,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       // not take the session over (a card run's session stays the card run's).
       const ended = await ctx.sessions.turnEnded(session, client === GIT_CLIENT_ID ? null : actorOf(req));
       if (!ended.nameManual && ctx.sessionTitler.isDue(ended.name, ended.turnCount)) void ctx.sessionTitler.name(session.id);
+      // The turn's tool call ids are done with: a new turn never repeats one.
+      ctx.toolCalls.forget(session.id);
       // The hold a turn-start took ends here: one request opens a turn, one
       // closes it. A caller that never held it (a whole-file writer of old)
       // releases nothing.

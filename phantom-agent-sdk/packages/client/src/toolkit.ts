@@ -123,9 +123,14 @@ export function serverToolKit(listing: readonly PublishedTool[]): ToolKit {
           // The abort signal rides into the request: an interrupt aborts it and
           // the server stops what the tool was doing. The answer carries the
           // record line the api wrote (`record`), filed here, never shown to the model.
+          // SENT ONCE: a tool call is not idempotent — the connection's retry
+          // rule (any 5xx) would run a timed-out command again, for its whole
+          // timeout, and the api would write a second result for the same
+          // call id. The envelope's `retryable` is the MODEL's to act on.
           execute: async (args: unknown, opts?: { abortSignal?: AbortSignal; toolCallId?: string }) => {
             const answer = await ctx.backend.callRaw<unknown>('POST', `/tools/${def.name}`, args ?? {},
-              { sessionId: ctx.sessionId, signal: opts?.abortSignal, headers: opts?.toolCallId ? { [TOOL_CALL_HEADER]: opts.toolCallId } : undefined });
+              { sessionId: ctx.sessionId, signal: opts?.abortSignal, retry: false,
+                headers: opts?.toolCallId ? { [TOOL_CALL_HEADER]: opts.toolCallId } : undefined });
             const { record, ...envelope } = answer as { record?: { line: TranscriptLine; lines: number; updated_at: string } } & Record<string, unknown>;
             if (record) ctx.recorded(record);
             return envelope;

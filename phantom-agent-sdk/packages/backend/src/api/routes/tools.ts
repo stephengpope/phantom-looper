@@ -91,6 +91,14 @@ export function toolRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         // hands the line back with the answer. A call with no id (a script
         // cron's bash) records its own.
         const toolCallId = typeof req.headers[TOOL_CALL_HEADER] === 'string' ? req.headers[TOOL_CALL_HEADER] : '';
+        // A call id runs once: a request repeating one (the caller retried)
+        // is answered what the first run answered — see ToolCalls.claim.
+        const answer = toolCallId
+          ? await ctx.toolCalls.claim(session.id, toolCallId, run)
+          : await run();
+        return reply.code(answer.status).send(answer.body);
+
+        async function run(): Promise<{ status: number; body: unknown }> {
         if (toolCallId) end = ctx.toolCalls.begin(session.id);
         // The client aborting its fetch surfaces as the socket closing with
         // the reply unfinished — the one reliable disconnect signal
@@ -129,7 +137,8 @@ export function toolRoutes(app: FastifyInstance, ctx: PhantomBackend) {
           ? await ctx.toolCalls.record(session.id, client, { toolCallId, toolName: def.name, input: req.body ?? {} }, envelope)
           : null;
         end();
-        return reply.code(status).send(written ? { ...envelope, record: written } : envelope);
+        return { status, body: written ? { ...envelope, record: written } : envelope };
+        }
       } catch (error) { end(); return send(reply, error); }
     });
   }
