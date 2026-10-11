@@ -12,7 +12,7 @@
 // first (the syncs, the sweeps). A person's tool call waits, and the person
 // sees why on the feed.
 import { newId } from '@phantom-agent-sdk/client';
-import type { ContainerPlan, ContainerState, DetachEvent, FileType, FileStat, Repo, WorkspaceFiles, WorkspaceHost } from './WorkspaceHost.js';
+import type { ActiveContainer, ContainerPlan, ContainerState, DetachEvent, FileType, FileStat, Repo, WorkspaceFiles, WorkspaceHost } from './WorkspaceHost.js';
 import { Sandbox, type Exec, type RunOpts, type RunResult, type StreamRecord } from './Sandbox.js';
 import type { GitAuth } from '../git/Git.js';
 import type { PoolProject } from './CheckoutPool.js';
@@ -174,11 +174,13 @@ export class RemoteHost implements WorkspaceHost {
   containerRemove(workspaceId: string): Promise<void> { return this.#call({ type: 'containerRemove', workspaceId }); }
   containerState(workspaceId: string): Promise<ContainerState> { return this.#call({ type: 'containerState', workspaceId }); }
 
-  /** Unknown while offline reads as none: the reaper and the refresh skip
-   *  what they cannot see, and ask again next tick. */
-  activeWorkspaces(): Promise<string[]> {
+  /** Unknown while offline reads as none: the jobs skip what they cannot
+   *  see, and ask again next run. A runner from before the image was in
+   *  the answer sends bare ids: its image reads as unknown (''). */
+  activeWorkspaces(): Promise<ActiveContainer[]> {
     if (!this.online) return Promise.resolve([]);
-    return this.#call({ type: 'activeWorkspaces' });
+    return this.#call<Array<string | ActiveContainer>>({ type: 'activeWorkspaces' })
+      .then((list) => list.map((entry) => (typeof entry === 'string' ? { workspaceId: entry, image: '' } : entry)));
   }
 
   sandbox(workspaceId: string): Sandbox { return new Sandbox(new RemoteExec(this, workspaceId)); }

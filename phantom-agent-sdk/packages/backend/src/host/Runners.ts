@@ -20,7 +20,7 @@ import type { Drizzle } from '../storage/Database.js';
 import { runners, workspaces, type ProjectRow, type RunnerRow } from '../storage/schema.js';
 import type { LocalHost } from '../runtime/LocalHost.js';
 import { RemoteHost } from '../runtime/RemoteHost.js';
-import type { WorkspaceHost } from '../runtime/WorkspaceHost.js';
+import type { ActiveContainer, WorkspaceHost } from '../runtime/WorkspaceHost.js';
 import type { Settings } from '../storage/Settings.js';
 import type { HostHello, HostLoad, Job, JobEvent } from './protocol.js';
 import { newId, type UpdateEvent } from '@phantom-agent-sdk/client';
@@ -207,11 +207,11 @@ export class Runners {
     return new Map(rows.flatMap((row) => (row.hostId ? [[row.hostId, row.n] as const] : [])));
   }
 
-  /** Running containers on every host that can answer right now — this
-   *  server's own included whatever it places, for what it still holds. */
-  async activeWorkspaces(): Promise<string[]> {
+  /** Running session containers on every host that can answer right now —
+   *  this server's own included whatever it places, for what it still holds. */
+  async activeContainers(): Promise<ActiveContainer[]> {
     const lists = await Promise.all([
-      this.local.activeWorkspaces().catch(() => [] as string[]),
+      this.local.activeWorkspaces().catch(() => [] as ActiveContainer[]),
       ...this.onlineRunners().map((host) => host.activeWorkspaces()),
     ]);
     return lists.flat();

@@ -69,7 +69,7 @@ export function sdkSettings(options: { sessionImageTag: string }): SettingDefini
     { key: "backup_idle_sessions_interval_ms", type: "number", default: 300000, label: "back up idle sessions every", group: "sessions",
       description: "How often idle sessions' unpushed work is pushed to their branches.", unit: "ms", min: 1000 },
     { key: "remove_old_containers_interval_ms", type: "number", default: 60000, label: "remove old containers every", group: "sessions",
-      description: "How often session containers past the idle timeout are removed. The timeout itself is only checked this often.", unit: "ms", min: 1000 },
+      description: "How often session containers past the idle timeout, or on an image their project no longer names, are removed. The timeout itself is only checked this often.", unit: "ms", min: 1000 },
     { key: "free_disk_space_interval_ms", type: "number", default: 60000, label: "free disk space every", group: "sessions",
       description: "How often each box's disk is checked against the disk cleanup rule.", unit: "ms", min: 1000 },
     { key: "work_state_refresh_ms", type: "number", default: 10000, label: "work-state refresh", group: "sessions",

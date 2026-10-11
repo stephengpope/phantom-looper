@@ -12,7 +12,7 @@ import type Docker from 'dockerode';
 import fs from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import path from 'node:path';
-import type { ContainerPlan, ContainerState, DetachEvent, FileType, FileStat, Repo, WorkspaceFiles, WorkspaceHost } from './WorkspaceHost.js';
+import type { ActiveContainer, ContainerPlan, ContainerState, DetachEvent, FileType, FileStat, Repo, WorkspaceFiles, WorkspaceHost } from './WorkspaceHost.js';
 import { Sandbox, DockerExec } from './Sandbox.js';
 import { buildContainerSpec } from './SessionContainers.js';
 import type { Images } from './Images.js';
@@ -272,17 +272,18 @@ export class LocalHost implements WorkspaceHost {
     return info.State.Running ? 'running' : 'stopped';
   }
 
-  /** Workspace ids that have a running container, read from Docker off the
-   *  container names. (Docker's name filter is a substring match, so the
-   *  prefix is checked again here.) */
-  async activeWorkspaces(): Promise<string[]> {
+  /** The running session containers, read from Docker off the container
+   *  names, each with the image it was created from. (Docker's name filter
+   *  is a substring match, so the prefix is checked again here.) */
+  async activeWorkspaces(): Promise<ActiveContainer[]> {
     const list = await this.docker.listContainers({ filters: { name: [NAME_PREFIX], status: ['running'] } })
       .catch((error) => { log.warn({ err: errStr(error) }, 'could not list containers'); return []; });
     return list.flatMap((container) => (container.Names ?? [])
       .map((name) => name.replace(/^\//, ''))
       .filter((name) => name.startsWith(NAME_PREFIX))
       .map((name) => name.slice(NAME_PREFIX.length))
-      .filter(isId));
+      .filter(isId)
+      .map((workspaceId) => ({ workspaceId, image: container.Image })));
   }
 
   sandbox(workspaceId: string): Sandbox {

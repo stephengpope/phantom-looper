@@ -69,6 +69,9 @@ export interface ContainerPlan {
   databaseHost: string | null;
 }
 
+/** A running session container: its workspace, and the image it was created from. */
+export interface ActiveContainer { workspaceId: string; image: string }
+
 export type ContainerState = 'running' | 'stopped' | 'absent';
 
 /** What a detached command reports as it runs: its process-session id once
@@ -103,8 +106,9 @@ export interface WorkspaceHost {
   containerRemove(workspaceId: string): Promise<void>;
   /** Probed, never created. */
   containerState(workspaceId: string): Promise<ContainerState>;
-  /** The workspaces with a running container on this host. */
-  activeWorkspaces(): Promise<string[]>;
+  /** The running session containers on this host: each one's workspace
+   *  and the image it runs. */
+  activeWorkspaces(): Promise<ActiveContainer[]>;
   /** Exec on the running container. The container must be up (containerUp). */
   sandbox(workspaceId: string): Sandbox;
   /** A command that outlives the call: its output goes to

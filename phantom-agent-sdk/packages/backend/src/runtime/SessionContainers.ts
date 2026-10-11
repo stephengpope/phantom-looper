@@ -20,7 +20,7 @@ import type { ProjectRow } from '../storage/schema.js';
 import type { Settings } from '../storage/Settings.js';
 import type { AgentDatabases } from '../storage/AgentDatabases.js';
 import * as checkoutPool from './CheckoutPool.js';
-import type { ContainerPlan, ContainerState, WorkspaceHost } from './WorkspaceHost.js';
+import type { ActiveContainer, ContainerPlan, ContainerState, WorkspaceHost } from './WorkspaceHost.js';
 import type { Runners } from '../host/Runners.js';
 import { containerName } from './LocalHost.js';
 import { logger, errStr } from '../lib/log.js';
@@ -133,8 +133,11 @@ export class SessionContainers {
 
   name(workspaceId: string): string { return containerName(workspaceId); }
 
+  /** The running session containers on every host, each with its image. */
+  activeContainers(): Promise<ActiveContainer[]> { return this.hosts.activeContainers(); }
+
   /** Workspace ids that have a running container, on every host. */
-  activeWorkspaces(): Promise<string[]> { return this.hosts.activeWorkspaces(); }
+  async activeWorkspaces(): Promise<string[]> { return (await this.activeContainers()).map((container) => container.workspaceId); }
 
   /** The workspace's container, probed on its host — never created. */
   async state(workspaceId: string): Promise<ContainerState> {

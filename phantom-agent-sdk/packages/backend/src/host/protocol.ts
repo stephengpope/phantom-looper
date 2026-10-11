@@ -29,6 +29,8 @@ export type Job = { id: string } & (
   | { type: 'containerUp'; workspaceId: string; plan: ContainerPlan }
   | { type: 'containerRemove'; workspaceId: string }
   | { type: 'containerState'; workspaceId: string }
+  /** Answers ActiveContainer[] (runtime/WorkspaceHost.ts): each running
+   *  session container's workspace and image. */
   | { type: 'activeWorkspaces' }
   | { type: 'exec'; workspaceId: string; argv: string[]; cwd?: string; stdin?: string; maxBytes?: number; timeoutMs?: number }
   | { type: 'execStream'; workspaceId: string; argv: string[]; cwd?: string; timeoutMs?: number }

@@ -248,7 +248,7 @@ export class PhantomBackend {
     this.maintenance = new Maintenance(this.settings, [
       restockSpareClones({ projects: this.projects, settings: this.settings, runners: this.runners }),
       backupIdleSessions({ projects: this.projects, sessions: this.sessions, gitSync: this.git.sync }),
-      removeOldContainers({ settings: this.settings, sessionContainers: this.sessionContainers, idleWorkspaces: (idleMs) => this.idleContainerWorkspaces(idleMs) }),
+      removeOldContainers({ settings: this.settings, workspaces: this.workspaces, projects: this.projects, sessionContainers: this.sessionContainers, busy: (ids) => this.busyWorkspaces(ids) }),
       freeDiskSpace({ settings: this.settings, projects: this.projects, sessions: this.sessions, runners: this.runners,
         sessionContainers: this.sessionContainers, gitSync: this.git.sync, busy: (ids) => this.busyWorkspaces(ids) }),
     ]);
@@ -365,14 +365,6 @@ export class PhantomBackend {
    *  files past every timeout, for ever. Only a person's turn is activity. */
   async busyWorkspaces(ids: string[]): Promise<Set<string>> {
     return this.sessions.workspacesHeld(ids);
-  }
-
-  /** Workspaces with a running container not touched for `idleMs` and not busy — what remove_old_containers takes. */
-  async idleContainerWorkspaces(idleMs: number): Promise<string[]> {
-    const active = await this.sessionContainers.activeWorkspaces();
-    const idle = await this.workspaces.listIdle(active, idleMs);
-    const busy = await this.busyWorkspaces(idle);
-    return idle.filter((id) => !busy.has(id));
   }
 
   /** Begin the backend's own loops: the work-state refresh (the upkeep
