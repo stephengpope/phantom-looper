@@ -40,9 +40,9 @@ export type Job = { id: string } & (
   | { type: 'cancel'; job: string }
   | { type: 'disk' }
   | { type: 'diskSupport' }
-  /** Maintenance, on the API's timer, run where the volume is: the warm
-   *  checkout tick for these projects, and the
-   *  prune of release images older than `keep` that no container uses. */
+  /** Maintenance, on the API's timers, run where the volume is: the warm
+   *  checkout tick for these projects, and the prune of release images older
+   *  than `keep` that no container uses (answers how many went). */
   | { type: 'poolTick'; projects: PoolProject[] }
   | { type: 'removeOldImages'; keep: string[] }
   /** Upgrade the runner to a release: it pulls the images and hands the tag

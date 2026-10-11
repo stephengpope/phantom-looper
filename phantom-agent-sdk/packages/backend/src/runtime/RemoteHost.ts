@@ -217,7 +217,8 @@ export class RemoteHost implements WorkspaceHost {
   disk(): Promise<{ usedPct: number; freeGB: number }> { return this.#call({ type: 'disk' }); }
   diskSupport(): Promise<string | null> { return this.#call({ type: 'diskSupport' }); }
   poolTick(projects: PoolProject[]): Promise<void> { return this.#call({ type: 'poolTick', projects }); }
-  removeOldImages(keep: string[]): Promise<void> { return this.#call({ type: 'removeOldImages', keep }); }
+  /** A runner from before the count answers null: read as none. */
+  removeOldImages(keep: string[]): Promise<number> { return this.#call<number | null>({ type: 'removeOldImages', keep }).then((count) => count ?? 0); }
   /** Upgrade the runner to `tag`: its progress as UpdateEvents until it
    *  restarts (the stream ends, or the new boot fails it `host_restarted`,
    *  which the caller reads as the same thing) or fails. */

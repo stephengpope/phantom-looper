@@ -26,7 +26,6 @@
 // and an image newer than the running release (an update in flight pulled
 // it; deleting it made the update fail with "image not on this machine").
 import type { SessionRow, ProjectRow } from '../storage/schema.js';
-import { API_IMAGE, APP_VERSION } from '../lib/env.js';
 import type { Settings } from '../storage/Settings.js';
 import type { Projects } from '../storage/Projects.js';
 import type { Sessions } from '../storage/Sessions.js';
@@ -37,6 +36,7 @@ import type { GitSync } from '../git/GitSync.js';
 import { workState, type PushResult } from '../git/Git.js';
 import type { MaintenanceJob } from './Maintenance.js';
 import { workspaceOwners } from './owners.js';
+import { currentImages } from './removeUnusedImages.js';
 import { logger, errStr } from '../lib/log.js';
 
 const log = logger('disk');
@@ -54,17 +54,6 @@ export function tooFull(disk: DiskState, pct: number): boolean {
 }
 
 const rounded = (disk: DiskState) => ({ usedPct: Math.round(disk.usedPct), freeGB: Math.round(disk.freeGB) });
-
-/** The api's own image at its current tag — handed in by compose (a container
- *  cannot name its own image). The tag rule is the same one settings.ts uses
- *  for the session image default: a release version is its own tag, anything
- *  else tracks latest. A wrong guess here is harmless: an image a container
- *  uses is never removed. */
-const API_IMAGE_CURRENT = (() => {
-  const repo = API_IMAGE;
-  const version = APP_VERSION;
-  return `${repo}:${/^v\d+\.\d+\.\d+/.test(version) ? version : 'latest'}`;
-})();
 
 /** Everything disk cleanup does to the world, handed in — so the loop below
  *  is the whole of the logic, and a test runs it against fakes. */
@@ -188,7 +177,7 @@ export function freeDiskSpace(deps: {
     description: `When a box's disk is over disk_cleanup_percent or under ${MIN_FREE_GB} GB free: frees unused release images, then backs up and deletes idle, merged sessions oldest first until it is not.`,
     where: 'api and session runners',
     async run() {
-      const currents = [String(await settings.resolve('container_image')), API_IMAGE_CURRENT];
+      const currents = await currentImages(settings);
       const pct = Number(await settings.resolve('disk_cleanup_percent'));
       const idleMs = Number(await settings.resolve('container_idle_ms'));
       // This server's box too, whatever it places: it may still hold workspaces
@@ -216,8 +205,8 @@ export function freeDiskSpace(deps: {
           // once the container is gone, which is exactly the idle session here.
           landed: async (session, project) => !!session.branch && (await workState(box.host.repo(session.id), session.branch, project.baseBranch)) === 'merged',
           // Images owns the rule and refuses while a pull is in flight (Images.ts).
-          removeOldImages: () => box.host.removeOldImages(currents)
-            .catch((error) => log.warn({ box: box.host.name, err: errStr(error) }, 'image cleanup failed')),
+          removeOldImages: async () => { await box.host.removeOldImages(currents)
+            .catch((error) => log.warn({ box: box.host.name, err: errStr(error) }, 'image cleanup failed')); },
           backup: (session, project, whenSafe) => gitSync.backup(session, project, whenSafe),
           deleteSession: async (session) => {
             await sessionContainers.remove(session.id);

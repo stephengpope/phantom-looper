@@ -131,6 +131,7 @@ export interface WorkspaceHost {
   /** The warm-checkout tick for these projects, against this box's volume
    *  (CheckoutPool.tick); a tick under a running one is dropped. */
   poolTick(projects: PoolProject[]): Promise<void>;
-  /** Remove release images older than each of `keep` that no container uses. */
-  removeOldImages(keep: string[]): Promise<void>;
+  /** Remove release images older than each of `keep` that no container
+   *  uses; answers how many. */
+  removeOldImages(keep: string[]): Promise<number>;
 }

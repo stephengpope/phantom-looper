@@ -352,7 +352,7 @@ export class LocalHost implements WorkspaceHost {
    *  for both. `bavail` (what an unprivileged user may still use) is the
    *  honest measure of "full". */
   poolTick(projects: PoolProject[]): Promise<void> { return poolTick(projects, this.paths); }
-  removeOldImages(keep: string[]): Promise<void> { return this.images.removeOlderThan(keep); }
+  removeOldImages(keep: string[]): Promise<number> { return this.images.removeOlderThan(keep); }
 
   async disk(): Promise<{ usedPct: number; freeGB: number }> {
     const stat = await fs.statfs(this.paths.root);

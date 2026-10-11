@@ -44,6 +44,7 @@ import { Maintenance } from './maintenance/Maintenance.js';
 import { restockSpareClones } from './maintenance/restockSpareClones.js';
 import { backupIdleSessions } from './maintenance/backupIdleSessions.js';
 import { removeOldContainers } from './maintenance/removeOldContainers.js';
+import { removeUnusedImages } from './maintenance/removeUnusedImages.js';
 import { freeDiskSpace } from './maintenance/freeDiskSpace.js';
 import { refreshWorkState } from './git/workRefresh.js';
 import { TelegramBotState } from './telegram/botState.js';
@@ -249,6 +250,7 @@ export class PhantomBackend {
       restockSpareClones({ projects: this.projects, settings: this.settings, runners: this.runners }),
       backupIdleSessions({ projects: this.projects, sessions: this.sessions, gitSync: this.git.sync }),
       removeOldContainers({ settings: this.settings, workspaces: this.workspaces, projects: this.projects, sessionContainers: this.sessionContainers, busy: (ids) => this.busyWorkspaces(ids) }),
+      removeUnusedImages({ settings: this.settings, runners: this.runners }),
       freeDiskSpace({ settings: this.settings, projects: this.projects, sessions: this.sessions, runners: this.runners,
         sessionContainers: this.sessionContainers, gitSync: this.git.sync, busy: (ids) => this.busyWorkspaces(ids) }),
     ]);

@@ -113,7 +113,7 @@ export class Images {
    *  each streaming the same layers. */
   private pulls = new Map<string, Promise<void>>();
   /** The removal in progress, if any — pulls wait on it. */
-  private removal: Promise<void> | null = null;
+  private removal: Promise<number> | null = null;
 
   constructor(private readonly docker: Docker) {}
 
@@ -162,17 +162,18 @@ export class Images {
    *
    *  Refused outright while any pull is in flight — the pull's layers are
    *  the one thing this must never touch, so the sweep waits its turn. */
-  async removeOlderThan(currents: string[]): Promise<void> {
+  async removeOlderThan(currents: string[]): Promise<number> {
     if (this.pulls.size > 0) {
       log.info({ pulling: [...this.pulls.keys()] }, 'image cleanup skipped — a pull is in flight');
-      return;
+      return 0;
     }
     if (this.removal) return this.removal;
     this.removal = this.removeStale(currents).finally(() => { this.removal = null; });
     return this.removal;
   }
 
-  private async removeStale(currents: string[]): Promise<void> {
+  /** Answers how many tags it removed. */
+  private async removeStale(currents: string[]): Promise<number> {
     const live = currents
       .map(splitRef)
       .flatMap(({ repo, tag }) => { const release = releaseOf(tag); return release ? [{ repo, release: release }] : []; });
@@ -190,10 +191,12 @@ export class Images {
         if (live.some((live) => live.repo === repo && olderRelease(release, live.release))) stale.add(ref);
       }
     }
+    let removed = 0;
     for (const tag of stale) {
       await this.docker.getImage(tag).remove()
-        .then(() => log.info({ image: tag }, 'old image removed'))
+        .then(() => { removed++; log.info({ image: tag }, 'old image removed'); })
         .catch((error) => log.warn({ image: tag, err: errStr(error) }, 'could not remove old image'));
     }
+    return removed;
   }
 }
