@@ -126,10 +126,18 @@ export class TelegramAssistantBot {
 
   /** Point the chat's watch at the session it is on now: the active session
    *  in code mode, its own assistant session in assistant mode (none until
-   *  the first assistant turn made one). A watch already there stays. */
-  async syncWatch(chatId: number): Promise<void> {
+   *  the first assistant turn made one). A watch already there stays. One
+   *  sync at a time per chat: two at once would each start a watch. */
+  syncWatch(chatId: number): Promise<void> {
+    const next = (this.syncing.get(chatId) ?? Promise.resolve()).then(() => this.#syncWatch(chatId));
+    this.syncing.set(chatId, next.catch(() => undefined));
+    return next;
+  }
+  private readonly syncing = new Map<number, Promise<void>>();
+
+  async #syncWatch(chatId: number): Promise<void> {
     const bot = await this.state.read(chatId);
-    const target = bot.mode === 'code' ? bot.activeSessionId : await this.assistantSessionOf(chatId);
+    const target = bot.mode === 'code' ? bot.activeSessionId : bot.assistantSessionId;
     const current = this.watches.get(chatId);
     if (current?.sessionId === target) return;
     if (current) { this.watches.delete(chatId); await current.stop(); }
@@ -330,37 +338,24 @@ export class TelegramAssistantBot {
     }
   }
 
-  /** The assistant's session row, pointed at what the user is looking at:
-   *  made on first use, re-pointed on every turn (Sessions.repoint). */
-  private assistantSessions = new Map<number, string>();
-
-  /** The chat's assistant conversation as it stands: the one this process
-   *  made or last used, else the newest assistant session the bot opened
-   *  for this chat's user (the row outlives the process — a restart resumes
-   *  the conversation instead of starting a new one), else none yet. Runs
-   *  as the chat's user, so a user's chat sees only its own. */
-  private async assistantSessionOf(chatId: number): Promise<string | null> {
-    const known = this.assistantSessions.get(chatId);
-    if (known) return known;
-    const listed = await this.backend.sessions.list({ type: 'assistant', startedBy: TELEGRAM_STARTER, order: 'created', limit: 1 });
-    const newest = listed.sessions[0];
-    if (!newest) return null;
-    this.assistantSessions.set(chatId, newest.id);
-    return newest.id;
-  }
-
+  /** The chat's assistant session — its own conversation, on the chat's
+   *  row (state, migration 006), so a restart resumes it and no chat can
+   *  land on another's. Made on first use, pointed at what the user is
+   *  looking at on every turn (Sessions.repoint); one found gone (deleted
+   *  under the foreign key, or destroyed) is replaced. */
   private async ensureAssistantSession(chatId: number, projectId: string | null, activeSessionId?: string | null): Promise<{ id: string }> {
     if (!projectId) throw new Error('no active project — /projects to pick one');
-    const known = await this.assistantSessionOf(chatId);
+    const known = (await this.state.read(chatId)).assistantSessionId;
     if (known) {
-      await this.backend.sessions.repoint(known, projectId, activeSessionId);
       const row = await this.backend.sessions.get(known);
-      if (row) return row;
-      this.assistantSessions.delete(chatId); // purged underneath us — make a new one
+      if (row && row.status !== 'destroyed') {
+        await this.backend.sessions.repoint(known, projectId, activeSessionId);
+        return row;
+      }
     }
     const row = await this.backend.sessions.start(projectId, AssistantAgent.systemPromptLayout,
       { type: 'assistant', startedBy: TELEGRAM_STARTER, workspaceSessionId: activeSessionId });
-    this.assistantSessions.set(chatId, row.id);
+    await this.state.setAssistantSession(chatId, row.id);
     await this.syncWatch(chatId);
     return row;
   }

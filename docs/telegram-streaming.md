@@ -58,8 +58,9 @@ The watch also keeps the typing indicator up for the whole turn.
 
 `TelegramAssistantBot.syncWatch` points each chat's watch at the right session
 when the mode or the session changes, and `reconcile` starts one for every
-linked chat at boot. The assistant session is found in the database when the
-process does not remember it.
+linked chat at boot. Both sessions are on the chat's row
+(`telegram_chat_state`): the active session in code mode, the chat's own
+assistant session in assistant mode.
 
 ### `phantom-agent-sdk/packages/backend/src/telegram/ReplyBubble.ts` — `ReplyBubble`
 
@@ -148,6 +149,9 @@ npm test
   driver's relay died mid-turn.
 - v0.1.99: call deadlines on `TelegramApi`; the chat's assistant session is
   looked up in the database at boot.
-- Next: the renderer rebuilt as `ReplyBubble` (one timer, blocks drawn by
+- v0.1.100: the renderer rebuilt as `ReplyBubble` (one timer, blocks drawn by
   comparison, failures logged) replacing `sink.ts` and `bubble.ts`. Nothing
   visible changed except the dots moving once a second instead of every 600 ms.
+  The chat's assistant session moved onto the chat's own row
+  (`telegram_chat_state.assistant_session_id`, app migration 006): before, a
+  restart took the newest assistant session the bot had opened — anyone's.
