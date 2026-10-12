@@ -51,6 +51,10 @@ export function guards(auth: GitAuth): string[] {
     '-c', 'core.fsmonitor=',
     '-c', 'core.sshCommand=',
     '-c', 'protocol.ext.allow=never',                                  // ext:: is a command, not an address
+    // SSH-form github.com addresses (a submodule's usual spelling) become the
+    // https form the helper above answers — the same host, the same token.
+    '-c', 'url.https://github.com/.insteadOf=git@github.com:',
+    '-c', 'url.https://github.com/.insteadOf=ssh://git@github.com/',
   ];
 }
 
@@ -153,6 +157,92 @@ export async function cloneFresh(dir: string, auth: GitAuth, branch: string): Pr
   }).catch(cleanThrow);
   await git(dir, ['config', 'user.name', 'phantom-looper']);
   await git(dir, ['config', 'user.email', 'agent@phantom-looper.local']);
+}
+
+// ── Submodules ────────────────────────────────────────────────────────────────────────────
+// A submodule is its own repository inside the checkout, pinned by the parent
+// at one commit. With git_submodules on, the session works in all of them:
+// every sync step runs over the LIST of repos, submodules first (deepest
+// first) and the root last, so a repo is always settled and pushed before
+// the one that points at it. The functions below are the only submodule-
+// specific git; everything else in this file takes a Repo and does not care
+// which one it is.
+
+/** A submodule as a Repo: the same checkout, every command run in `path`. */
+export function submoduleRepo(root: Repo, path: string): Repo {
+  return {
+    git: (args, auth) => root.git(['-C', path, ...args], auth),
+    exists: (rel) => root.exists(`${path}/${rel}`),
+  };
+}
+
+export interface RepoEntry {
+  repo: Repo;
+  /** '' for the root; a submodule's path from the root otherwise. */
+  path: string;
+  /** The submodule's own remote url, from .gitmodules (absolute). Undefined for the root. */
+  url?: string;
+}
+
+/** Every repo in the checkout, in sync order: submodules deepest first, the
+ *  root last. [root] alone when there are none. Reads only submodules that
+ *  are on disk — one the setting left empty is not a repo to work in. */
+export async function repoList(root: Repo, rootUrl: string): Promise<RepoEntry[]> {
+  const { stdout } = await root.git(['submodule', 'status', '--recursive']);
+  const entries: RepoEntry[] = [];
+  for (const line of stdout.split('\n')) {
+    // "-" prefix = not initialized; " " or "+" or "U" = on disk.
+    const m = /^[ +U]([0-9a-f]+) (\S+)/.exec(line);
+    if (!m) continue;
+    const path = m[2];
+    const { stdout: raw } = await root.git(['config', '-f', '.gitmodules', `submodule.${await submoduleName(root, path)}.url`]).catch(() => ({ stdout: '' }));
+    entries.push({ repo: submoduleRepo(root, path), path, url: absoluteSubmoduleUrl(raw.trim(), rootUrl) });
+  }
+  entries.reverse(); // status lists parents before children; children must finish first
+  entries.push({ repo: root, path: '' });
+  return entries;
+}
+
+/** .gitmodules keys submodules by NAME, which is usually but not always the path. */
+async function submoduleName(root: Repo, path: string): Promise<string> {
+  const { stdout } = await root.git(['config', '-f', '.gitmodules', '--get-regexp', String.raw`^submodule\..*\.path$`]).catch(() => ({ stdout: '' }));
+  for (const line of stdout.split('\n')) {
+    const m = /^submodule\.(.+)\.path (.+)$/.exec(line);
+    if (m && m[2] === path) return m[1];
+  }
+  return path;
+}
+
+/** A relative .gitmodules url (`../sdk.git`) is relative to the ROOT's remote. */
+function absoluteSubmoduleUrl(url: string, rootUrl: string): string {
+  if (!url.startsWith('./') && !url.startsWith('../')) return url;
+  const base = rootUrl.replace(/\/+$/, '');
+  const parts = base.split('/');
+  for (const seg of url.split('/')) {
+    if (seg === '..') parts.pop();
+    else if (seg !== '.') parts.push(seg);
+  }
+  return parts.join('/');
+}
+
+/** The branch a submodule's work lands on: `.gitmodules` `branch`, else the
+ *  remote's default branch. The root's is the project's baseBranch. */
+export async function submoduleBase(root: Repo, entry: RepoEntry, auth: GitAuth): Promise<string> {
+  const { stdout } = await root.git(['config', '-f', '.gitmodules', `submodule.${await submoduleName(root, entry.path)}.branch`]).catch(() => ({ stdout: '' }));
+  if (stdout.trim() && stdout.trim() !== '.') return stdout.trim();
+  const { stdout: head } = await entry.repo.git(['ls-remote', '--symref', 'origin', 'HEAD'], auth);
+  const m = /^ref: refs\/heads\/(\S+)\tHEAD/m.exec(head);
+  if (!m) throw new Error(`cannot tell the default branch of the submodule at ${entry.path}`);
+  return m[1];
+}
+
+/** Fetch every submodule's files at the commit the checkout pins — session
+ *  start and pool stocking. --checkout is not a default spelled out: without
+ *  it git honours `submodule.<name>.update` from the checkout's own
+ *  .git/config, where `!<command>` runs the command — a file the agent can
+ *  write (verified). */
+export async function fetchSubmodules(repo: Repo, auth: GitAuth): Promise<void> {
+  await repo.git(['submodule', 'update', '--init', '--recursive', '--checkout'], auth);
 }
 
 /** Bring a checkout KNOWN to hold nothing of its own exactly up to the remote.

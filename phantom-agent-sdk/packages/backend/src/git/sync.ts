@@ -46,7 +46,9 @@ import type { Settings } from '../storage/Settings.js';
 import {
   fetchBase, squashToMergeBase, commitStaged, rebaseOntoBase, rebaseAbort, rebaseInProgress,
   landingProblems, pushSession, pushSessionForced, pushFailed, pushToBase, hasWorkToLand, GIT_CLIENT_ID,
+  repoList, submoduleBase, type RepoEntry, type GitAuth,
 } from './Git.js';
+import { scopeOf } from '../lib/scopes.js';
 import { newId } from '@phantom-agent-sdk/client';
 import { logger, errStr } from '../lib/log.js';
 
@@ -91,8 +93,13 @@ export interface SyncEvent { step: SyncStep; label: string; detail?: string }
 export interface ConflictContext {
   branch: string;
   baseBranch: string;
+  /** Relative to the directory the rebase stopped in. */
   files: string[];
   arrived: string[];
+  /** The submodule the rebase stopped in, as a path from the checkout's
+   *  root; absent when it stopped in the root. The agent is told to work
+   *  from that directory and to `git add` it in the root afterwards. */
+  submodule?: string;
 }
 
 export interface SyncResult {
@@ -186,6 +193,10 @@ export interface SyncOptions {
   hold?: boolean;
 }
 
+/** One repo the sync runs over: the root, or a submodule with its own base
+ *  branch and remote. */
+interface Target extends RepoEntry { base: string; auth: GitAuth }
+
 export async function syncBranch(
   deps: SyncDeps, session: SessionRow, project: ProjectRow, opts: SyncOptions,
 ): Promise<SyncResult> {
@@ -201,14 +212,6 @@ export async function syncBranch(
   const report = async (step: SyncStep, detail?: string) => { await deps.onEvent?.({ step, label: syncStepLabel(step, opts.landOnBase), detail }); };
   const rounds = opts.landOnBase ? ROUNDS : 1;
   const hold = opts.hold ?? true;
-
-  // A rebase an instant sync left stopped for the agent: its markers are in
-  // the files. Staging them (`add -A`) would commit them as resolved and
-  // the abort below would throw the agent's work away — so no sync runs
-  // here until the agent finishes it.
-  if (await rebaseInProgress(dir)) {
-    return { outcome: 'blocked', reason: 'a rebase is in progress in this checkout — resolve it first' };
-  }
 
   // 0 — the locks ARE the concurrency test. The CHECKOUT lock first, always:
   // one sync writes a checkout at a time, whoever asked (Workspaces owns it;
@@ -233,7 +236,13 @@ export async function syncBranch(
     }
   }, RENEW_MS);
 
-  try {
+  /** One repo, steps 1–9. `t.base` and `t.auth` are the repo's own: a
+   *  submodule lands on ITS base branch at ITS remote. Paths in the result
+   *  are root-relative; paths in the conflict briefing are relative to the
+   *  directory the agent is told to work in. */
+  const syncOne = async (t: Target): Promise<SyncResult> => {
+    const { repo: dir, base, auth } = t;
+    const at = (file: string) => (t.path ? `${t.path}/${file}` : file);
     // 1 — what is on base that we do not have. Collected before anything is
     // rewritten, and carried into the conflict turn as the briefing.
     let arrived = await fetchBase(dir, base, auth);
@@ -252,7 +261,7 @@ export async function syncBranch(
     // never ran, or a rebase the agent finished itself after a conflict was
     // left for it. Origin's copy is then history HEAD has already replaced;
     // folding it back in (a merge) re-creates the conflict it came from.
-    await report('backup');
+    await report('backup', t.path || undefined);
     const backed = await pushSession(dir, workspace.branch, auth);
     if (pushFailed(backed)) return { outcome: 'error', reason: `could not back the branch up — nothing was rewritten: ${backed.error}` };
 
@@ -267,7 +276,7 @@ export async function syncBranch(
     // the session has not touched anything. The replay below is then a plain
     // fast-forward, which is exactly what that pull wants.
     if (await hasWorkToLand(dir, base)) {
-      await report('commit');
+      await report('commit', t.path || undefined);
       try {
         await dir.git(['add', '-A']);
         const { stdout: mergeBase } = await dir.git(['merge-base', 'HEAD', `origin/${base}`]);
@@ -289,7 +298,7 @@ export async function syncBranch(
       // 4 — replay onto base. Round 2+ re-fetches; there is no second squash
       // and no second commit message, because there is still just one commit.
       if (round > 1) arrived = await fetchBase(dir, base, auth);
-      await report('rebase', `round ${round}`);
+      await report('rebase', `round ${round}${t.path ? ` in ${t.path}` : ''}`);
       const rebased = await rebaseOntoBase(dir, base);
 
       if (rebased === 'conflict') {
@@ -298,20 +307,22 @@ export async function syncBranch(
         const ctx: ConflictContext = {
           branch: workspace.branch, baseBranch: base,
           files: conflicted.trim().split('\n').filter(Boolean), arrived,
+          ...(t.path ? { submodule: t.path } : {}),
         };
+        const rootFiles = ctx.files.map(at);
         // No fixer (instant sync): the rebase is LEFT STOPPED, markers in the
         // files, for the agent to resolve in place at its next turn — the
         // note carries the files. Instant sync stays off the checkout while
         // the rebase is in progress.
         if (!deps.resolve) {
-          const reason = `conflict in ${ctx.files.join(', ')} — left for the agent to resolve`;
-          log.warn({ session: session.id, round, files: ctx.files }, 'sync: conflict left in progress for the agent');
-          const blocked: SyncResult = { outcome: 'blocked', reason, rounds: round, arrived, files: ctx.files };
+          const reason = `conflict in ${rootFiles.join(', ')} — left for the agent to resolve`;
+          log.warn({ session: session.id, round, files: rootFiles }, 'sync: conflict left in progress for the agent');
+          const blocked: SyncResult = { outcome: 'blocked', reason, rounds: round, arrived, files: rootFiles };
           await deps.recordSummary?.(session, project, blocked, opts).catch((error) =>
             log.warn({ session: session.id, err: errStr(error) }, 'could not record sync summary'));
           return blocked;
         }
-        await report('resolve', ctx.files.join(', '));
+        await report('resolve', rootFiles.join(', '));
         const ok = await deps.resolve(session, project, workspace.id, ctx).catch((error) => {
           log.error({ session: session.id, err: errStr(error) }, 'conflict turn threw'); return false;
         });
@@ -330,23 +341,23 @@ export async function syncBranch(
         }
       } else if (rebased === 'error') {
         await rebaseAbort(dir);
-        return { outcome: 'error', reason: 'the rebase could not start', rounds: round };
+        return { outcome: 'error', reason: `the rebase could not start${t.path ? ` in ${t.path}` : ''}`, rounds: round };
       }
 
       // 6 — verify against the repo: clean tree, no unmerged entries, no
       // rebase still in flight, origin/<base> in HEAD's history — named.
-      await report('verify');
+      await report('verify', t.path || undefined);
       const failed = await landingProblems(dir, base);
       if (failed.length > 0) {
         await rebaseAbort(dir);
-        return { outcome: 'blocked', reason: `verification failed after the rebase — ${failed.join('; ')}`, rounds: round };
+        return { outcome: 'blocked', reason: `verification failed after the rebase${t.path ? ` in ${t.path}` : ''} — ${failed.join('; ')}`, rounds: round };
       }
 
       // 7 — the branch, rewritten by the rebase, so this forces with a lease.
-      await report('push_branch');
+      await report('push_branch', t.path || undefined);
       const pushed = await pushSessionForced(dir, workspace.branch, auth);
       if (pushed === 'pushed') {
-        await deps.workspaces.markPushed(workspace.id);
+        if (!t.path) await deps.workspaces.markPushed(workspace.id);
       } else if (opts.landOnBase) {
         // The backup must exist before base is touched.
         return { outcome: 'error', reason: `branch push failed: ${pushFailed(pushed) ? pushed.error : pushed}`, rounds: round };
@@ -356,14 +367,12 @@ export async function syncBranch(
       const { stdout: changed } = await dir.git(['diff', '--name-only', before, 'HEAD']);
       const done: SyncResult = {
         outcome: 'ok', rounds: round, sha, arrived,
-        files: changed.trim().split('\n').filter(Boolean),
+        files: changed.trim().split('\n').filter(Boolean).map(at),
         pushed: pushed === 'pushed',
         ...(pushed !== 'pushed' ? { reason: `synced, but the branch push failed: ${pushFailed(pushed) ? pushed.error : pushed}` } : {}),
       };
       if (!opts.landOnBase) {
-        log.info({ session: session.id, base, arrived: arrived.length, pushed }, 'pulled base');
-        await deps.recordSummary?.(session, project, done, opts).catch((error) =>
-          log.warn({ session: session.id, err: errStr(error) }, 'could not record sync summary'));
+        log.info({ session: session.id, base, path: t.path, arrived: arrived.length, pushed }, 'pulled base');
         return done;
       }
 
@@ -372,12 +381,10 @@ export async function syncBranch(
       if (Number(ahead.trim()) === 0) return { outcome: 'nothing', rounds: round, arrived };
 
       // 8 — the landing: HEAD to base, fast-forward by construction.
-      await report('push_base');
+      await report('push_base', t.path || undefined);
       const landed = await pushToBase(dir, base, auth);
       if (landed === 'pushed') {
-        log.info({ session: session.id, base, rounds: round }, 'pushed');
-        await deps.recordSummary?.(session, project, done, opts).catch((error) =>
-          log.warn({ session: session.id, err: errStr(error) }, 'could not record sync summary'));
+        log.info({ session: session.id, base, path: t.path, rounds: round }, 'pushed');
         return done;
       }
       if (landed === 'error') return { outcome: 'error', reason: 'push to base failed', rounds: round };
@@ -387,9 +394,48 @@ export async function syncBranch(
     }
     // 10 — give up. Nothing on base, branch intact on origin.
     return { outcome: 'blocked', reason: `${base} kept moving — ${ROUNDS} rounds spent`, rounds: ROUNDS };
+  };
+
+  // The repos, in the order they must settle: every submodule (deepest
+  // first), then the root. A submodule is pushed and landed before the
+  // root commits the pointer to it, so the root never names a commit that
+  // is not on the submodule's remote. Off: the root alone, as ever.
+  const targets: Target[] = [];
+  try {
+    if (await deps.settings.resolve<boolean>('git_submodules', scopeOf(project)) === true) {
+      for (const entry of await repoList(dir, auth.url)) {
+        const subAuth = entry.path ? { ...auth, url: entry.url! } : auth;
+        targets.push({ ...entry, auth: subAuth, base: entry.path ? await submoduleBase(dir, entry, subAuth) : base });
+      }
+    } else {
+      targets.push({ repo: dir, path: '', auth, base });
+    }
+    // A rebase an instant sync left stopped for the agent: its markers are in
+    // the files. Staging them (`add -A`) would commit them as resolved and
+    // the abort below would throw the agent's work away — so no sync runs
+    // here until the agent finishes it.
+    for (const t of targets) {
+      if (await rebaseInProgress(t.repo)) {
+        return { outcome: 'blocked', reason: `a rebase is in progress in this checkout${t.path ? ` (${t.path})` : ''} — resolve it first` };
+      }
+    }
+
+    // Each submodule's result stops the sync when it is not clean: the root
+    // must not land a pointer to work that did not. 'nothing' means that
+    // submodule had no part in this sync.
+    let result: SyncResult = { outcome: 'nothing', arrived: [] };
+    for (const t of targets) {
+      result = await syncOne(t);
+      if (t.path && result.outcome !== 'ok' && result.outcome !== 'nothing') return result;
+    }
+    if (result.outcome === 'ok') {
+      await deps.recordSummary?.(session, project, result, opts).catch((error) =>
+        log.warn({ session: session.id, err: errStr(error) }, 'could not record sync summary'));
+    }
+    return result;
   } catch (error) {
     log.error({ session: session.id, err: errStr(error) }, 'sync failed');
-    await rebaseAbort(dir);
+    for (const t of targets.length ? targets : [{ repo: dir }]) await rebaseAbort(t.repo);
     return { outcome: 'error', reason: (error as Error).message };
   } finally {
     clearInterval(heartbeat);

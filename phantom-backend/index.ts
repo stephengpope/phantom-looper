@@ -89,7 +89,7 @@ async function main() {
           }, session.id);
           // Resolving means writing files: never in plan mode.
           await backend.sessions.setPlanMode(session.id, false);
-          const result = await agent.sendMessage(toCodingAgent.resolveConflict(ctx.branch, ctx.baseBranch, ctx.files, ctx.arrived));
+          const result = await agent.sendMessage(toCodingAgent.resolveConflict(ctx.branch, ctx.baseBranch, ctx.files, ctx.arrived, ctx.submodule));
           return result?.outcome === 'done';
         } catch (error) {
           if ((error as { code?: string }).code === 'session_locked') log.warn({ session: session.id }, 'conflict turn could not open the session — it is busy');

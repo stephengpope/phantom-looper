@@ -14,12 +14,16 @@
 // ═══ CONFLICT → the session's coding agent · when a rebase stops ═══════════
 // Blanks: {{branch}} the session branch, {{base}} the base branch,
 // {{files}} the conflicted paths, {{arrived}} the commits that landed on base.
+// {{where}} names the submodule the rebase stopped in — a sentence when it is
+// one, nothing (the line vanishes) when the stop is in the repository root.
 //
 // A user message, not instructions in a system prompt: the coding prompt is
 // frozen with its conversation, and this is guidance reaching a session that
 // is already running.
 
 export const RESOLVE_CONFLICT = `New commits landed on "{{base}}" that touch the same files you changed. A rebase was run to replay your work on top of them and a conflict needs to be resolved.
+
+{{where}}
 
 What landed on "{{base}}":
 {{arrived}}
@@ -41,7 +45,7 @@ Before you stop, check your own work — the system re-checks exactly this again
 - \`git status\` is clean: nothing unstaged, nothing uncommitted.
 - No conflict markers (<<<<<<<, =======, >>>>>>>) remain in any file.
 - The rebase has finished: \`git status\` shows no rebase in progress (run \`git rebase --continue\` until it does not).
-- origin/{{base}} is contained in your work: \`git merge-base --is-ancestor origin/{{base}} HEAD\` exits 0 (read-only, no network).
+- origin/{{base}} is contained in your work: \`git merge-base --is-ancestor origin/{{base}} HEAD\` exits 0 in the directory you resolved in (read-only, no network).
 Stop only when all four pass. If you stop early, the replay is undone and the failed check is reported.
 
 If the two sides genuinely cannot both be kept — what arrived and what you wrote contradict each other — do your best to reconcile them. If you cannot, stop and say which files and what the contradiction is.`;

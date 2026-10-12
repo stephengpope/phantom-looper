@@ -15,7 +15,7 @@ import type { Projects } from '../storage/Projects.js';
 
 import type { Settings } from '../storage/Settings.js';
 import { remoteUrl } from '../git/remote.js';
-import { cloneFresh, refreshPristine, type GitAuth } from '../git/Git.js';
+import { cloneFresh, refreshPristine, fetchSubmodules, localRepo, type GitAuth } from '../git/Git.js';
 import { newId, idTime } from '@phantom-agent-sdk/client';
 import { slotPrefix, slotUlid, type Paths } from '../lib/paths.js';
 import { logger, errStr } from '../lib/log.js';
@@ -77,6 +77,8 @@ export interface PoolProject {
   target: number;
   refreshMs: number;
   maxAgeMs: number;
+  /** git_submodules: stock the slot with its submodules already fetched. */
+  submodules: boolean;
 }
 
 /** The facts for every project, or null when the list cannot be read.
@@ -91,12 +93,13 @@ export async function poolFacts(projects: Projects, settings: Settings): Promise
   }
   return Promise.all(rows.map(async (project) => {
     const cfg = await settings.resolveMany(
-      ['spare_clones', 'spare_clone_refresh_ms', 'spare_clone_max_age_ms'],
-      scopeOf(project)) as { spare_clones: number; spare_clone_refresh_ms: number; spare_clone_max_age_ms: number };
+      ['spare_clones', 'spare_clone_refresh_ms', 'spare_clone_max_age_ms', 'git_submodules'],
+      scopeOf(project)) as { spare_clones: number; spare_clone_refresh_ms: number; spare_clone_max_age_ms: number; git_submodules: boolean };
     return {
       id: project.id, owner: project.owner, name: project.name, baseBranch: project.baseBranch,
       auth: await resolveAuth(settings, project),
       target: Number(cfg.spare_clones), refreshMs: Number(cfg.spare_clone_refresh_ms), maxAgeMs: Number(cfg.spare_clone_max_age_ms),
+      submodules: cfg.git_submodules === true,
     };
   }));
 }
@@ -160,6 +163,7 @@ export async function tick(projectRows: PoolProject[], paths: Paths): Promise<vo
         if (now - stat.mtimeMs < refreshMs) continue;
         try {
           await refreshPristine(path.join(full, 'repo'), auth, project.baseBranch);
+          if (project.submodules) await fetchSubmodules(localRepo(path.join(full, 'repo')), auth);
           await fs.utimes(full, new Date(), new Date());
         } catch (error) {
           log.warn({ slot, err: errStr(error) }, 'ready checkout would not refresh — discarding');
@@ -175,6 +179,7 @@ export async function tick(projectRows: PoolProject[], paths: Paths): Promise<vo
         try {
           await fs.mkdir(path.join(staging), { recursive: true });
           await cloneFresh(path.join(staging, 'repo'), auth, project.baseBranch);
+          if (project.submodules) await fetchSubmodules(localRepo(path.join(staging, 'repo')), auth);
           await fs.mkdir(path.join(staging, 'scratch'), { recursive: true });
           await fs.mkdir(paths.poolReady, { recursive: true });
           // Only NOW is it usable, and the rename is what says so.

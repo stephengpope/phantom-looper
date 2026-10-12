@@ -25,11 +25,12 @@ import type { Drizzle } from './Database.js';
 import { workspaces, sessions, cards, type WorkspaceRow, type ProjectRow } from '../storage/schema.js';
 import type { SessionEvents } from '../agents/SessionEvents.js';
 import type { Settings } from './Settings.js';
-import { checkoutBranch, classifyGitFailure, localState, type WorkState } from '../git/Git.js';
+import { checkoutBranch, classifyGitFailure, localState, fetchSubmodules, repoList, type WorkState } from '../git/Git.js';
 import { resolveAuth } from '../runtime/CheckoutPool.js';
 import type { Runners } from '../host/Runners.js';
 import type { WorkspaceHost } from '../runtime/WorkspaceHost.js';
 import { acting } from '../lib/acting.js';
+import { scopeOf } from '../lib/scopes.js';
 import { logger } from '../lib/log.js';
 
 const log = logger('workspaces');
@@ -115,6 +116,23 @@ export class Workspaces {
         found = 'new';
       } else {
         found = await checkoutBranch(dir, branch, auth);
+      }
+      // Only now is the commit known — the branch above may pin a submodule
+      // somewhere base does not — so this is where the submodules are
+      // fetched, then each put on the session's branch by the same rule as
+      // the root (found on origin = a restart). A submodule that cannot be
+      // fetched fails the checkout under its own name: a dependency silently
+      // missing costs the session its whole run.
+      if (await this.settings.resolve<boolean>('git_submodules', scopeOf(project))) {
+        try {
+          await fetchSubmodules(dir, auth);
+          for (const entry of await repoList(dir, auth.url)) {
+            if (entry.path) await checkoutBranch(entry.repo, branch, { ...auth, url: entry.url! });
+          }
+        } catch (error) {
+          throw new WorkspaceError('submodule_failed',
+            `cannot check out the submodules of ${project.owner}/${project.name}: ${(error as Error).message}`);
+        }
       }
       const { stdout } = await dir.git(['rev-parse', 'HEAD']);
       return { head: stdout.trim(), found, claimed };

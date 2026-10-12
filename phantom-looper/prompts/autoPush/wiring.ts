@@ -12,11 +12,16 @@ export const toCodingAgent = {
    *  landed on base — the briefing that separates resolving a conflict from
    *  guessing at one. */
   resolveConflict: (
-    branch: string, base: string, files: string[], arrived: string[],
+    branch: string, base: string, files: string[], arrived: string[], submodule?: string,
   ) => fill(RESOLVE_CONFLICT, {
     branch, base,
     files: bullets(files, '(none reported — run git status)'),
     arrived: bullets(arrived, '(nothing new — the conflict is with an earlier state of the branch)'),
+    // A submodule is its own repository: the rebase stopped THERE, so every
+    // command runs there, and the root must then be told to point at the result.
+    where: submodule
+      ? `This conflict is inside the submodule at \`${submodule}\`, which is its own repository. Run every command below from that directory. When its rebase has finished, return to the repository root and run \`git add ${submodule}\` so the main repository points at the result.`
+      : '',
   }),
 
   /** A status-update message dropped into the transcript after a successful
