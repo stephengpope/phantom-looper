@@ -44,6 +44,7 @@ services:
     pull_policy: missing
     build: .
     restart: unless-stopped
+    init: true  # tini as PID 1 reaps orphaned git children, see session-runner
     depends_on:
       postgres:
         condition: service_healthy
@@ -216,6 +217,7 @@ services:
     image: ${BACKEND_API_IMAGE:-${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}}:${BACKEND_TAG:-${PHANTOM_BACKEND_TAG:-latest}}
     pull_policy: missing
     restart: unless-stopped
+    init: true  # tini as PID 1 reaps orphaned git children, see session-runner
     deploy:
       replicas: ${SESSION_RUNNERS:-1}
     depends_on:
@@ -246,6 +248,7 @@ services:
     image: ${BACKEND_API_IMAGE:-${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend}}:${BACKEND_TAG:-${PHANTOM_BACKEND_TAG:-latest}}
     pull_policy: missing
     restart: unless-stopped
+    init: true  # tini as PID 1 reaps the git helpers git detaches (gc --auto); node as PID 1 never does and they pile up as zombies until the task cap stops every spawn
     deploy:
       replicas: ${CLIENT_RUNNERS:-1}
     depends_on:
