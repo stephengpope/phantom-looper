@@ -266,7 +266,10 @@ ENV PLAYWRIGHT_MCP_BROWSER=chromium
 # for OpenAI's whisper that runs on CTranslate2 — same flags, 4x faster on CPU,
 # no PyTorch dependency. Aliased to `whisper` so the original command name works.
 # Decodes audio through the `ffmpeg` binary on PATH (the upstream static build above).
-RUN pip install --break-system-packages whisper-ctranslate2 \
+# yt-dlp (media download from YouTube and ~1000 other sites) rides the same pip
+# install — it also merges/converts through the `ffmpeg` on PATH. Pip, not apt:
+# sites change weekly and the Debian package lags months behind.
+RUN pip install --break-system-packages whisper-ctranslate2 yt-dlp \
   && ln -s "$(which whisper-ctranslate2)" /usr/local/bin/whisper
 
 # Pre-authentication for the agent, when the API turns it on: the helper reads
@@ -303,7 +306,7 @@ RUN rg --version && git --version && git lfs version && gh --version \
   && psql --version && ssh -V && rsync --version \
   && cc --version && cmake --version && sudo -n true \
   && docker --version && docker buildx version && docker compose version \
-  && whisper --help > /dev/null \
+  && whisper --help > /dev/null && yt-dlp --version \
   # Languages
   && go version && test "$(go env GOTOOLCHAIN)" = local \
   && rustc --version && cargo --version && cargo fmt --version && cargo clippy --version \
