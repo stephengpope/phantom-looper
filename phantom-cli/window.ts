@@ -819,11 +819,20 @@ export class WindowStore {
 
   // ── opening and closing ───────────────────────────────────────────────────
 
+  /** Every open, counted. The screen belongs to the LATEST one asked for:
+   *  an open that lands after a newer one began (boot's /new still cutting
+   *  its checkout while /resume reads a session in a tenth of the time)
+   *  joins the ring and is watched, but does not take the screen — that
+   *  flashed the resumed conversation and then covered it with the blank
+   *  new session (2026-10-15). */
+  private openSeq = 0;
+
   /** Opening JOINS the window rather than replacing what is here. One already
    *  loaded is switched to, never opened twice. phantom-looper's openSession is the ONE
    *  path that resolves the target (create / restart / attach), pulls the
    *  server transcript and the frozen prompt. Opening never locks. */
   openSession = async (target: OpenTarget): Promise<boolean> => {
+    const seq = ++this.openSeq;
     try {
       if (target.action === 'open') {
         if (target.id === this.sessions.activeId) { this.note('already here'); return true; }
@@ -887,16 +896,21 @@ export class WindowStore {
       // session whose files were swept gets them back the same way (ping
       // restores them), so its first message does not fail on them.
       if (row.workspaceId) void this.api('POST', `/sessions/${row.id}/ping`, {}).catch(quiet('wake the session'));
+      // A newer open began while this one was loading: this one is not what
+      // is wanted on screen. It still joins (loaded, watched, a tab away) —
+      // but the screen, the draft, the splash and the clocks are the
+      // newer open's to set.
+      const superseded = seq !== this.openSeq;
       // Whose is the text in the box? /new cleared it before these calls ran,
       // so anything there now was typed FOR the session being built — it goes
       // with the new entry. Any other open was picked from an overlay over a
       // session the user was typing in: that text is parked on the one left.
       const onScreen = this.draftOnScreen();
       const prev = this.sessions.active();
-      if (prev && target.action !== 'new') prev.draft = onScreen;
+      if (prev && target.action !== 'new' && !superseded) prev.draft = onScreen;
       const resumed = [...agent.session.messages];
       this.sessions.add({
-        ...(target.action === 'new' ? { draft: onScreen } : {}),
+        ...(target.action === 'new' && !superseded ? { draft: onScreen } : {}),
         id: row.id, branch, projectId: row.projectId,
         name: row.name ?? null,
         agent, summary,
@@ -912,12 +926,13 @@ export class WindowStore {
           ...(project.error ? [{ type: 'note', id: nextId('note'), text: project.error } as Part] : []),
           ...messagesToParts(resumed),
         ],
-      });
+      }, { activate: !superseded });
+      this.watchSession(row.id);
+      if (superseded) return true;
       // An empty conversation opens on the splash, exactly as boot's does.
       this.splash = resumed.length === 0;
       this.opening = false;
       this.watchTasks();
-      this.watchSession(row.id);
       this.notify();
       this.opts.onSession?.({ id: row.id, branch, projectId: row.projectId });
       return true;
@@ -926,7 +941,9 @@ export class WindowStore {
         ? `could not start a session in ${this.wsLabel(target.projectId)}`
         : target.action === 'duplicate' ? `could not duplicate session ${target.id}`
           : `could not open session ${target.id}`;
-      this.opening = false;
+      // A failed open that was already superseded leaves the newer open's
+      // screen state alone — only the note lands.
+      if (seq === this.openSeq) this.opening = false;
       this.note(`${what}: ${(entry as Error).message}`);
       return false;
     }

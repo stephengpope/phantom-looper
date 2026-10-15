@@ -180,10 +180,13 @@ export class SessionStore {
   }
 
   /** Add and make active. Adding one you already have just activates it —
-   *  /resume on a session that is already open must not open it twice. */
-  add(fresh: NewSession): LoadedSession {
+   *  /resume on a session that is already open must not open it twice.
+   *  `activate: false` joins the ring without taking the screen: an open
+   *  that lands AFTER the user asked for another session (window.ts's
+   *  openSession) must not pull the screen away from the one they chose. */
+  add(fresh: NewSession, { activate = true } = {}): LoadedSession {
     const existing = this.get(fresh.id);
-    if (existing) { this.activate(existing.id); return existing; }
+    if (existing) { if (activate) this.activate(existing.id); return existing; }
     const entry: LoadedSession = {
       id: fresh.id, branch: fresh.branch, projectId: fresh.projectId, name: fresh.name ?? null, card: fresh.card,
       agent: fresh.agent, summary: fresh.summary,
@@ -203,7 +206,7 @@ export class SessionStore {
     };
     entry.unwire = this.wire(entry);
     this.entries.push(entry);
-    this.activeId = entry.id;
+    if (activate) this.activeId = entry.id;
     this.notify();
     return entry;
   }
