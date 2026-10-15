@@ -582,12 +582,15 @@ export class WindowStore {
   /** The banner's model line before any turn: the row's provider/model, the
    *  project's reasoning setting. After the first turn, turn-start's word. */
   private async modelLineFor(row: { provider?: string | null; model?: string | null }, projectId: string): Promise<ModelLine> {
-    let reasoning = '';
+    return { provider: row.provider || 'unset', model: row.model || 'unset', reasoning: await this.reasoningFor(projectId) };
+  }
+
+  /** The project's reasoning setting, '' when it cannot be read. */
+  private async reasoningFor(projectId: string): Promise<string> {
     try {
       const settings = await this.api('GET', `/settings?project=${encodeURIComponent(projectId)}`) as Record<string, { value?: unknown }>;
-      reasoning = String(settings.coding_reasoning?.value ?? '');
-    } catch (entry) { quiet('read the reasoning setting')(entry); }
-    return { provider: row.provider || 'unset', model: row.model || 'unset', reasoning };
+      return String(settings.coding_reasoning?.value ?? '');
+    } catch (entry) { quiet('read the reasoning setting')(entry); return ''; }
   }
 
   // ── the session store, and the turn's two ends ────────────────────────────
@@ -850,23 +853,40 @@ export class WindowStore {
         onNotice: (notice) => forEntry()?.onNotice(notice),
       };
       const backend = this.opts.backend();
-      const agent: CodingAgent = target.action === 'new'
-        ? await CodingAgent.newSession(backend, handlers, target.projectId)
-        : await CodingAgent.resumeSession(backend, handlers, target.action === 'duplicate'
+      // Everything the banner needs that is NOT the session itself — the
+      // project's name and its reasoning setting — is asked for alongside
+      // the session, never after it: for a new session the project is known
+      // before anything is sent, so the whole open is one round trip; for a
+      // resume the row names the project, so it is two.
+      const banner = (projectId: string) => Promise.all([this.projectFacts(projectId), this.reasoningFor(projectId)]);
+      let agent: CodingAgent; let project: WsFacts; let reasoning: string;
+      if (target.action === 'new') {
+        [agent, [project, reasoning]] = await Promise.all([CodingAgent.newSession(backend, handlers, target.projectId), banner(target.projectId)]);
+      } else {
+        agent = await CodingAgent.resumeSession(backend, handlers, target.action === 'duplicate'
           ? ((await this.api('POST', `/sessions/${target.id}/duplicate`) as { id: string }).id)
           : target.id);
+        [project, reasoning] = await banner(agent.session.projectId);
+      }
       made = agent;
       agent.addToolKit(this.cliToolKit(agent.session.id, agent.session.projectId));
-      const row = await this.api('GET', `/sessions/${agent.session.id}`) as { id: string; branch: string; projectId: string;
-        name?: string | null; agent?: string | null; card?: number | null; planMode?: boolean; pinned?: boolean;
-        provider?: string | null; model?: string | null };
-      const summary = await this.modelLineFor(row, row.projectId);
+      // The row as the agent holds it: what the server answered on create,
+      // or the read a resume made — the same shape either way.
+      const row = agent.session.row;
+      // A coding session always has a checkout; '' is only the type's word
+      // for a row kind this window never opens.
+      const branch = row.branch ?? '';
+      const summary: ModelLine = { provider: row.provider || 'unset', model: row.model || 'unset', reasoning };
       const planMode = row.planMode === true;
       // The card this session builds, named the way the board names it
       // (`PHA-7`), resolved ONCE here where both facts are in hand.
-      const project = await this.projectFacts(row.projectId);
       const card = row.card != null
         ? `${project.cardPrefix ? `${project.cardPrefix}-` : 'card '}${row.card}` : undefined;
+      // The session's container comes up now, in the background, so the
+      // first tool call finds it running instead of starting it; and a
+      // session whose files were swept gets them back the same way (ping
+      // restores them), so its first message does not fail on them.
+      if (row.workspaceId) void this.api('POST', `/sessions/${row.id}/ping`, {}).catch(quiet('wake the session'));
       // Whose is the text in the box? /new cleared it before these calls ran,
       // so anything there now was typed FOR the session being built — it goes
       // with the new entry. Any other open was picked from an overlay over a
@@ -877,7 +897,7 @@ export class WindowStore {
       const resumed = [...agent.session.messages];
       this.sessions.add({
         ...(target.action === 'new' ? { draft: onScreen } : {}),
-        id: row.id, branch: row.branch, projectId: row.projectId,
+        id: row.id, branch, projectId: row.projectId,
         name: row.name ?? null,
         agent, summary,
         // The record the screen was drawn from is the agent's copy: its stamp
@@ -888,7 +908,7 @@ export class WindowStore {
         pinned: row.pinned === true,
         ...(card ? { card } : {}),
         done: [
-          ...bannerParts({ project: project.label, branch: row.branch }, summary),
+          ...bannerParts({ project: project.label, branch }, summary),
           ...(project.error ? [{ type: 'note', id: nextId('note'), text: project.error } as Part] : []),
           ...messagesToParts(resumed),
         ],
@@ -899,7 +919,7 @@ export class WindowStore {
       this.watchTasks();
       this.watchSession(row.id);
       this.notify();
-      this.opts.onSession?.({ id: row.id, branch: row.branch, projectId: row.projectId });
+      this.opts.onSession?.({ id: row.id, branch, projectId: row.projectId });
       return true;
     } catch (entry) {
       const what = target.action === 'new'
