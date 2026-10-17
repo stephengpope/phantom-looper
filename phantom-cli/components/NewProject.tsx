@@ -13,6 +13,11 @@
 // where credentials belong. If it is missing the server says so precisely, and
 // that message is worth more than a prompt that guesses.
 //
+// A third shape when the `github_repo` setting resolves (global, or the
+// caller's organization's or own): the default repo, one keystroke. The form
+// shows which repo that is and sends no url — the server resolves the
+// setting itself, so there is one reader of it, not two.
+//
 // Each step renders Screen directly. A local Frame component defined inside
 // the render was a new component type on every render, so React remounted the
 // whole step per keystroke — TextInput's cursor-at-end behaviour hid it.
@@ -27,7 +32,8 @@ import { ago } from './Launcher.js';
 import type { Api } from './Settings.js';
 
 export interface NewProjectRequest {
-  url: string; create?: boolean; private?: boolean; display_name?: string;
+  /** Absent: the server puts the project on the `github_repo` setting. */
+  url?: string; create?: boolean; private?: boolean; display_name?: string;
 }
 
 /** One row of GET /github/repos. */
@@ -43,7 +49,7 @@ type Step =
   | { at: 'pick' }
   | { at: 'url'; create: boolean }
   | { at: 'visibility'; url: string }
-  | { at: 'working'; what: string; back: 'pick' | 'url' };
+  | { at: 'working'; what: string; back: 'source' | 'pick' | 'url' };
 
 // A row of the picker: a listed repo, or whatever was typed.
 type Pick = { repo: GitHubRepo } | { typed: string };
@@ -63,6 +69,9 @@ export function NewProject({ api, onSubmit, onCancel, error, now }: {
   // a rejected submit hands the same list back without a second round trip.
   const [repos, setRepos] = useState<GitHubRepo[] | null>(null);
   const [notice, setNotice] = useState<string | undefined>();
+  // The github_repo setting as it resolves for this caller; null = none set.
+  // Read once per form; a failed read just leaves the choice off the list.
+  const [defaultRepo, setDefaultRepo] = useState<string | null>(null);
 
   useInput((_char, key) => { if (key.escape) onCancel(); },
     { isActive: step.at === 'url' });
@@ -75,10 +84,21 @@ export function NewProject({ api, onSubmit, onCancel, error, now }: {
   useEffect(() => {
     if (error) {
       setStep((step) => step.at === 'working'
-        ? (step.back === 'pick' ? { at: 'pick' } : { at: 'url', create: false })
+        ? (step.back === 'pick' ? { at: 'pick' } : step.back === 'source' ? { at: 'source' } : { at: 'url', create: false })
         : step);
     }
   }, [error]);
+
+  useEffect(() => {
+    let live = true;
+    api('GET', '/settings')
+      .then((settings) => {
+        const value = (settings as Record<string, { value?: unknown }>).github_repo?.value;
+        if (live && typeof value === 'string' && value) setDefaultRepo(value);
+      })
+      .catch(() => { /* no default on offer; the other two ways in stand */ });
+    return () => { live = false; };
+  }, [api]);
 
   // The list, fetched on entering the picker. A failure is not a dead end:
   // the URL field is the old way in, and the notice says why you are there.
@@ -102,6 +122,11 @@ export function NewProject({ api, onSubmit, onCancel, error, now }: {
     setStep({ at: 'working', what, back });
     onSubmit({ url: what });
   };
+  const submitDefault = (what: string) => {
+    setNotice(undefined);
+    setStep({ at: 'working', what, back: 'source' });
+    onSubmit({});
+  };
 
   if (step.at === 'source') {
     return (
@@ -109,12 +134,17 @@ export function NewProject({ api, onSubmit, onCancel, error, now }: {
         footer={[{ key: 'enter', does: 'choose' }, { key: 'esc', does: 'back' }]}>
         <SelectList
           choices={[
-            { value: 'existing', label: 'an existing repo', detail: 'you already have it on GitHub',
+            ...(defaultRepo ? [{ value: 'default' as const, label: 'the default repo', detail: defaultRepo,
+              hint: 'The github_repo setting — global, or your organization\'s or your own. Another board on the same code.' }] : []),
+            { value: 'existing' as const, label: 'an existing repo', detail: 'you already have it on GitHub',
               hint: 'Nothing is created — phantom-looper clones it.' },
-            { value: 'create', label: 'a new repo', detail: 'create it on GitHub now',
+            { value: 'create' as const, label: 'a new repo', detail: 'create it on GitHub now',
               hint: 'Created with an initial commit. Fails if the name is taken.' },
           ]}
-          onSelect={(pick) => setStep(pick === 'create' ? { at: 'url', create: true } : { at: 'pick' })}
+          onSelect={(pick) => {
+            if (pick === 'default') submitDefault(defaultRepo!);
+            else setStep(pick === 'create' ? { at: 'url', create: true } : { at: 'pick' });
+          }}
           onCancel={onCancel}
         />
       </Screen>
@@ -133,7 +163,8 @@ export function NewProject({ api, onSubmit, onCancel, error, now }: {
         { text: repo.private ? 'private' : 'public', width: 9 },
         { text: repo.added ? 'already a project' : repo.pushedAt ? `pushed ${ago(repo.pushedAt, now)}` : '' },
       ],
-      hint: repo.added ? 'This repo is a project here already.' : `Clones ${repo.owner}/${repo.name}; work starts from ${repo.defaultBranch}.`,
+      hint: repo.added ? `A project is on this repo already; another board on the same code. Work starts from ${repo.defaultBranch}.`
+        : `Clones ${repo.owner}/${repo.name}; work starts from ${repo.defaultBranch}.`,
     }));
     // Whatever was typed, unless it names a listed repo exactly — the way in
     // for a repo the token cannot see.
@@ -159,7 +190,6 @@ export function NewProject({ api, onSubmit, onCancel, error, now }: {
           reserve={2}
           onSelect={(pick) => {
             if ('typed' in pick) { submitExisting(pick.typed, 'pick'); return; }
-            if (pick.repo.added) { setNotice(`${pick.repo.owner}/${pick.repo.name} is already a project here`); return; }
             submitExisting(`${pick.repo.owner}/${pick.repo.name}`, 'pick');
           }}
           onCancel={() => { setNotice(undefined); setStep({ at: 'source' }); }}

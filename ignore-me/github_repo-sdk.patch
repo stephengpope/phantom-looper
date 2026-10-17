@@ -1,0 +1,222 @@
+The backend half of the `github_repo` setting (the cli half is in
+phantom-cli/components/NewProject.tsx). Written when the SDK was in-tree;
+main made it a submodule (github.com/stephengpope/phantom-agent-sdk) during
+the landing, so it goes there. In a checkout of that repo:
+
+    git apply --3way path/to/this.patch
+
+then bump the submodule pin here and delete this file.
+
+diff --git a/packages/backend/migrations/067_projects_share_repos.sql b/packages/backend/migrations/067_projects_share_repos.sql
+new file mode 100644
+index 0000000..c756980
+--- /dev/null
++++ b/packages/backend/migrations/067_projects_share_repos.sql
+@@ -0,0 +1,7 @@
++-- Several projects may be on one repository: the `github_repo` setting
++-- puts every new project on a shared repo unless told otherwise, so a
++-- board per team, per customer, per workstream on the same code is the
++-- normal case. Branches are named by workspace id and never collide; the
++-- clone pool is keyed by repo and branch, so they share warm clones.
++alter table phantom_agent_sdk.projects drop constraint projects_organization_owner_name_key;
++create index projects_organization_owner_name_idx on phantom_agent_sdk.projects (organization_id, owner, name);
+diff --git a/packages/backend/src/api/routes/projects.ts b/packages/backend/src/api/routes/projects.ts
+index d5866b2..2a565de 100644
+--- a/packages/backend/src/api/routes/projects.ts
++++ b/packages/backend/src/api/routes/projects.ts
+@@ -3,7 +3,6 @@ import type { ProjectRow } from '../../storage/schema.js';
+ import { parseRepoRef, remoteUrl } from '../../git/remote.js';
+ import { createRepo, listRepos, whoami } from '../../git/GitHub.js';
+ import { initializeRemote, classifyGitFailure } from '../../git/Git.js';
+-import { ProjectError } from '../../storage/Projects.js';
+ import { projectScope } from '../../lib/scopes.js';
+ import { newId } from '@phantom-agent-sdk/client';
+ import { ok, err } from '../HttpApi.js';
+@@ -76,17 +75,18 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
+     }))));
+   });
+ 
+-  app.post<{ Body: { url: string; base_branch?: string; branch_prefix?: string;
++  app.post<{ Body: { url?: string; base_branch?: string; branch_prefix?: string;
+     display_name?: string; create?: boolean; private?: boolean; description?: string; token?: string } }>(
+     '/projects', { schema: { ...TAG, summary: 'Add a project',
+-      description: 'Adds a GitHub repository as a project, given as a URL or `owner/name`. With `create`, the repository is created on GitHub first. The project belongs to the caller\'s organization.',
+-      body: { type: 'object', required: ['url'], additionalProperties: false,
++      description: 'Adds a GitHub repository as a project, given as a URL or `owner/name` — or, with no `url`, the `github_repo` setting as it resolves for the caller. With `create`, the repository is created on GitHub first. The project belongs to the caller\'s organization.',
++      body: { type: 'object', additionalProperties: false,
+         examples: [
+           { url: 'https://github.com/you/your-project', base_branch: 'main' },
++          { display_name: 'my board on the default repo' },
+           { url: 'https://github.com/you/new-project', create: true, private: true, token: 'ghp_can_create_repos' },
+         ],
+         properties: {
+-        url: { type: 'string', description: 'https://github.com/{owner}/{name} or owner/name; with create, a bare name creates under the token\'s account. Never with embedded credentials.' },
++        url: { type: 'string', description: 'https://github.com/{owner}/{name} or owner/name; with create, a bare name creates under the token\'s account. Never with embedded credentials. Omitted: the github_repo setting.' },
+         display_name: { type: 'string', description: 'Human label. Defaults to the project name from the URL.' },
+         base_branch: { type: 'string', default: 'main' },
+         branch_prefix: { type: 'string', default: 'agent' },
+@@ -95,12 +95,20 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
+         description: { type: 'string', description: 'With create: the GitHub repository description.' },
+         token: { type: 'string', description: 'PAT to create with; stored as this project\'s github_token. Falls back to the global one.' } } } } },
+     async (req, reply) => {
++      // No url names the github_repo setting as it resolves for the caller
++      // (global, or their organization's or own). Read here, once, and
++      // written into the row: the project is ON that repo from now on.
++      const url = req.body?.url?.trim() || await ctx.settings.resolve<string | null>('github_repo', actingScope());
++      if (!url) {
++        return reply.code(400).send(err('invalid_url',
++          'name the repo (a GitHub URL or owner/name), or set the github_repo setting for the one new projects use'));
++      }
+       // A bare name is enough to CREATE — the token says whose account. An
+       // existing repo has to be named in full: there is nothing to derive
+       // the owner from.
+       let owner = '', name: string;
+       try {
+-        const ref = parseRepoRef(req.body?.url ?? '');
++        const ref = parseRepoRef(url);
+         name = ref.name;
+         owner = ref.owner ?? '';
+       } catch (error) { return reply.code(400).send(err('invalid_url', (error as Error).message)); }
+@@ -151,13 +159,7 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
+         baseBranch,
+         branchPrefix: req.body.branch_prefix ?? 'agent',
+       };
+-      let created;
+-      try {
+-        created = await ctx.projects.create(row, writerOf(req));
+-      } catch (error) {
+-        if (error instanceof ProjectError) return reply.code(409).send(err(error.code, error.message));
+-        throw error;
+-      }
++      const created = await ctx.projects.create(row, writerOf(req));
+       // A token handed to create= belongs to this project: `github_token` at
+       // its own scope, the same key the global one uses one layer down.
+       if (ownToken) await ctx.settings.writeAtScope('project', projectScope(id), { github_token: ownToken }, writerOf(req));
+diff --git a/packages/backend/src/index.ts b/packages/backend/src/index.ts
+index 6c73c7c..e9311ee 100644
+--- a/packages/backend/src/index.ts
++++ b/packages/backend/src/index.ts
+@@ -33,7 +33,7 @@ export { newId, idTime, DEFAULT_COLUMNS, STATUS_ICON, normalizeKey, newKey, keye
+ export { PresetError, type PresetRow } from './storage/Presets.js';
+ 
+ // table owners' companions
+-export { ProjectError, defaultPrefix, columnsOf, type NewProject } from './storage/Projects.js';
++export { defaultPrefix, columnsOf, type NewProject } from './storage/Projects.js';
+ export { WorkspaceError, type WorkRefreshWorkspace } from './storage/Workspaces.js';
+ export { CardError, CARD_FIELDS, CARD_JSON_FIELDS, type Card, type CardFields, type ItemOp } from './storage/Cards.js';
+ export { CronError, CRON_FIELDS, isOnce, nextFire, type CronFields } from './storage/Crons.js';
+diff --git a/packages/backend/src/storage/Projects.ts b/packages/backend/src/storage/Projects.ts
+index daa2068..1438e7b 100644
+--- a/packages/backend/src/storage/Projects.ts
++++ b/packages/backend/src/storage/Projects.ts
+@@ -8,7 +8,7 @@
+ // re-read /projects. One bus, not a second one saying the same thing.
+ import { and, eq, sql } from 'drizzle-orm';
+ import type { Caller } from '../identity/Identity.js';
+-import { Database, type Drizzle, type Transaction } from './Database.js';
++import type { Drizzle, Transaction } from './Database.js';
+ import { projects, type ProjectRow } from '../storage/schema.js';
+ import { DEFAULT_COLUMNS } from '@phantom-agent-sdk/client';
+ import type { Settings } from './Settings.js';
+@@ -38,11 +38,6 @@ export interface NewProject {
+   organizationId?: string;
+ }
+ 
+-/** A write the table refuses, with the API's error code already chosen. */
+-export class ProjectError extends Error {
+-  constructor(readonly code: 'already_registered', message: string) { super(message); }
+-}
+-
+ export class Projects {
+   constructor(
+     private readonly database: Drizzle,
+@@ -87,14 +82,11 @@ export class Projects {
+     return (await this.settings.resolve('card_prefix', scopeOf(project))) ?? defaultPrefix(project.name);
+   }
+ 
+-  /** Refuses a repo that is already a project (`owner, name` is unique). */
++  /** Several projects may be on one repo (067): a board per team or per
++   *  workstream on the same code. Branches are named by workspace id, so
++   *  they never meet. */
+   async create(row: NewProject, by?: string): Promise<ProjectRow> {
+-    try {
+-      await this.database.insert(projects).values(row);
+-    } catch (error) {
+-      if (Database.isUniqueViolation(error)) throw new ProjectError('already_registered', `${row.owner}/${row.name} is already a project of this organization`);
+-      throw error;
+-    }
++    await this.database.insert(projects).values(row);
+     this.events?.publish(projectScope(row.id), [], by);
+     return (await this.get(row.id))!;
+   }
+diff --git a/packages/backend/src/storage/sdkSettings.test.ts b/packages/backend/src/storage/sdkSettings.test.ts
+new file mode 100644
+index 0000000..1593126
+--- /dev/null
++++ b/packages/backend/src/storage/sdkSettings.test.ts
+@@ -0,0 +1,23 @@
++// The github_repo setting's validator: what a value must look like to be
++// the repo new projects land on. Run: npm test (tsx --test) in this package.
++import { test } from 'node:test';
++import assert from 'node:assert/strict';
++import { sdkSettings } from './sdkSettings.js';
++
++const githubRepo = sdkSettings({ sessionImageTag: 'latest' }).find((def) => def.key === 'github_repo')!;
++
++test('github_repo: overridable by an organization, a user, a project', () => {
++  assert.deepEqual(githubRepo.overridableAt, ['organization', 'user', 'project']);
++  assert.equal(githubRepo.default, null);
++});
++
++test('github_repo: owner/name or a GitHub URL; a bare name has no owner to clone from', () => {
++  const check = githubRepo.check!;
++  assert.equal(check('acme/app'), null);
++  assert.equal(check('https://github.com/acme/app'), null);
++  assert.equal(check('https://github.com/acme/app.git'), null);
++  assert.match(check('app')!, /owner\/name/);
++  assert.match(check('https://gitlab.com/acme/app')!, /github\.com/);
++  assert.match(check('https://user:pat@github.com/acme/app')!, /credentials/);
++  assert.match(check('not a repo')!, /GitHub URL/);
++});
+diff --git a/packages/backend/src/storage/sdkSettings.ts b/packages/backend/src/storage/sdkSettings.ts
+index 7dc0187..b51b2b0 100644
+--- a/packages/backend/src/storage/sdkSettings.ts
++++ b/packages/backend/src/storage/sdkSettings.ts
+@@ -4,6 +4,7 @@
+ // through config.settings.
+ import { PROVIDERS, REASONINGS } from '@phantom-agent-sdk/client';
+ import { TIMEZONES } from '../lib/clock.js';
++import { parseRepoRef } from '../git/remote.js';
+ import type { SettingDefinition, AgentTypeDefinition, AgentTypeSettingSuffix } from '../doors.js';
+ import type { OverridableLayer } from '../lib/scopes.js';
+ /** Whatever a project may override, an organization and a user may too — a bigger project. */
+@@ -11,6 +12,11 @@ const SHARED: readonly OverridableLayer[] = ['organization', 'user', 'project'];
+ /** What an organization may decide for itself and a project or a user may not: where its media lives. */
+ const ORGANIZATION: readonly OverridableLayer[] = ['organization'];
+ 
++const checkRepo = (value: string): string | null => {
++  try { return parseRepoRef(value).owner ? null : `github repo needs owner/name (got "${value}")`; }
++  catch (error) { return (error as Error).message; }
++};
++
+ const checkTimezone = (value: string): string | null =>
+   TIMEZONES.includes(value) ? null
+     : `timezone must be an IANA time zone name like America/New_York or Europe/London (got "${value}")`;
+@@ -59,7 +65,7 @@ export function sdkSettings(options: { sessionImageTag: string }): SettingDefini
+     { key: "timezone", type: "string", default: "UTC", label: "time zone", group: "general",
+       description: "Your time zone — an IANA name like America/New_York or Europe/London. Every date the system shows or reads is in it: a cron's \"0 9 * * *\" is 9am here, the token report's \"today\" starts at midnight here, and the agents are told today's date here.", suggestions: TIMEZONES, check: checkTimezone, overridableAt: SHARED },
+     { key: "card_prefix", type: "string", default: null, label: "card number prefix", group: "board",
+-      description: "The letters in front of every card number on this board — \"PHA\" gives PHA-7. Unset means the first three letters of the repo name.", projectOnly: true },
++      description: "The letters in front of every card number on this board — \"PHA\" gives PHA-7. Unset means the first three letters of the repo name; set it when several boards share a repo.", projectOnly: true },
+     { key: "cron_enabled", type: "boolean", default: true, label: "crons", group: "crons",
+       description: "Scheduled prompts (crons) for this project. Off: none fire, and the agents lose their cron tools; the crons themselves are kept. A slot missed while off is not made up.", overridableAt: SHARED },
+     { key: "spare_clones", type: "number", default: 2, label: "spare clones", group: "sessions",
+@@ -168,6 +174,8 @@ export function sdkSettings(options: { sessionImageTag: string }): SettingDefini
+       description: "How long a download link works when the caller does not ask for a length, in seconds.", unit: "count", min: 60, max: 604800 },
+     { key: "media_link_max_seconds", type: "number", default: 3600, label: "longest link", group: "media", overridableAt: ORGANIZATION,
+       description: "The longest a caller may ask a link to work, in seconds. Providers allow at most 604800 (7 days).", unit: "count", min: 60, max: 604800 },
++    { key: "github_repo", type: "string", default: null, label: "github repo", group: "git", overridableAt: SHARED, check: checkRepo,
++      description: "The repository a new project is on when none is named — owner/name or its URL. An organization or a user may set their own. Read when the project is added; changing it later leaves existing projects where they are." },
+     credential("github_token", "github token", "git", "Lets phantom-looper manage GitHub repos: clone, push, and land work on the base branch. A project can hold its own token; otherwise this one is used.", undefined, { overridableAt: SHARED }),
+     credential("anthropic_api_key", "anthropic key", "llm", "Used by every agent set to the anthropic provider.", "anthropic", { overridableAt: SHARED }),
+     credential("openai_api_key", "openai key", "llm", "Used by every agent set to the openai provider.", "openai", { overridableAt: SHARED }),
