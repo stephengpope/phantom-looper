@@ -26,9 +26,17 @@ ENV NODE_ENV=production APP_VERSION=$VERSION
 # though ca-certificates drags it in — relying on a transitive install turns a
 # base-image change into "the server won't start".
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates openssl ripgrep xfsprogs \
+      git ca-certificates openssl ripgrep xfsprogs curl xz-utils \
   && rm -rf /var/lib/apt/lists/*
-RUN git --version && openssl version
+# ffprobe reads every media upload's facts (phantom-agent-sdk media/probe.ts).
+# The same static build the session image takes (build/session/Dockerfile,
+# "ffmpeg 9 as a static binary"), ffprobe alone — the one binary, no apt tree.
+ARG TARGETARCH
+ARG FFMPEG_BRANCH=n9.0
+RUN case "${TARGETARCH}" in amd64) a=linux64 ;; arm64) a=linuxarm64 ;; *) exit 1 ;; esac \
+  && curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-${FFMPEG_BRANCH}-latest-${a}-gpl-9.0.tar.xz" \
+      | tar -C /usr/local/bin -xJ --strip-components=2 --wildcards '*/bin/ffprobe'
+RUN git --version && openssl version && ffprobe -version | head -1
 WORKDIR /app
 COPY --from=build /app/node_modules node_modules
 COPY --from=build /app/dist dist
