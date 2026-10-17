@@ -9,7 +9,7 @@
 // moves stay in App.
 import type { ReactNode } from 'react';
 import { hostname } from 'node:os';
-import { readFile } from 'node:fs/promises';
+import { openAsBlob } from 'node:fs';
 import { basename } from 'node:path';
 import type { Tool } from 'ai';
 import { SessionStore, activeHold, type LoadedSession, type ModelLine } from './sessions.js';
@@ -150,6 +150,20 @@ const SWITCH_KEY: Record<'mic' | 'speaker' | 'headphones' | 'wake', string> = {
   mic: 'voice_mic_muted', speaker: 'voice_speaker_muted',
   headphones: 'voice_headphones', wake: 'voice_wake_word',
 };
+
+/** A dropped media file's facts in a few words for the chip and the note:
+ *  `, 1920×1080, 2:08` — what the agent needs to decide what to do with it
+ *  without a lookup. Empty when nothing is known (a PDF, text). */
+function describe(facts: Record<string, unknown> | undefined): string {
+  if (!facts) return '';
+  const parts: string[] = [];
+  if (typeof facts.width === 'number' && typeof facts.height === 'number') parts.push(`${facts.width}×${facts.height}`);
+  if (typeof facts.duration_seconds === 'number') {
+    const whole = Math.round(facts.duration_seconds);
+    parts.push(`${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`);
+  }
+  return parts.length ? `, ${parts.join(', ')}` : '';
+}
 
 /** The banner at the top of a session: where you are, then the model line. */
 function bannerParts(banner: { project: string; branch: string },
@@ -680,10 +694,12 @@ export class WindowStore {
   setSplash(on: boolean): void { this.splash = on; this.notify(); }
 
   /** Files dragged onto the window (drop.ts caught the paste before it
-   *  became text). Each is read locally and uploaded into the active
-   *  session's scratch pad; the agent hears where it landed through the
-   *  user message queue on the next turn — the drop itself sends
-   *  nothing, the user is still typing.
+   *  became text). Each is streamed from disk to the active session's
+   *  attachments route, which decides where it lands — media storage when
+   *  the project has media on, else the scratch pad — and answers where.
+   *  The chip inserted at the cursor expands to that on submit, so the
+   *  agent sees the media id or the scratch path inline; the drop itself
+   *  sends nothing, the user is still typing.
    *
    *  Returns a combined chip string to insert at the cursor (one chip per
    *  file that uploaded successfully), or null when nothing landed. */
@@ -692,14 +708,13 @@ export class WindowStore {
     if (!session) { this.note('a dropped file needs an open session — /new or /resume first'); return null; }
     const chips: string[] = [];
     for (const filePath of paths) {
+      const name = basename(filePath);
       try {
-        const data = await readFile(filePath);
-        const attached = await this.api('POST', `/sessions/${session.id}/attachments`,
-          { name: basename(filePath), data: data.toString('base64') }) as { path?: string };
-        const name = basename(filePath);
-        const scratchPath = attached.path ?? 'the scratch pad';
-        chips.push(this.pastes.collapseFile(name, scratchPath));
-        this.sessions.note(session.id, `${name} uploaded to the scratch pad`);
+        const attached = await this.opts.backend().callBytes<{ path?: string; media?: string; facts?: Record<string, unknown> }>(
+          'POST', `/sessions/${session.id}/attachments?name=${encodeURIComponent(name)}`, await openAsBlob(filePath), 'application/octet-stream');
+        const landed = attached.media ? `media file ${attached.media}${describe(attached.facts)}` : (attached.path ?? 'the scratch pad');
+        chips.push(this.pastes.collapseFile(name, attached.media ? `${name} (${landed})` : landed));
+        this.sessions.note(session.id, `${name} uploaded — ${landed}`);
       } catch (entry) {
         this.sessions.note(session.id, `drop failed: ${basename(filePath)} — ${(entry as Error).message}`);
       }
