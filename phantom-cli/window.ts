@@ -13,7 +13,7 @@ import { openAsBlob } from 'node:fs';
 import { basename } from 'node:path';
 import type { Tool } from 'ai';
 import { SessionStore, activeHold, type LoadedSession, type ModelLine } from './sessions.js';
-import type { AgentHandlers, BackendClient, ToolKit } from '@phantom-agent-sdk/client';
+import { sendToStorage, type AgentHandlers, type BackendClient, type MediaFile, type MediaUploadPlan, type ToolKit } from '@phantom-agent-sdk/client';
 import { parseLines, conversationFrom, usageTotals, lastUsage } from '@phantom-agent-sdk/client/transcript';
 import { CodingAgent } from '../phantom-looper/agents/coding.js';
 import { AssistantAgent } from '../phantom-looper/agents/assistant.js';
@@ -154,12 +154,11 @@ const SWITCH_KEY: Record<'mic' | 'speaker' | 'headphones' | 'wake', string> = {
 /** A dropped media file's facts in a few words for the chip and the note:
  *  `, 1920×1080, 2:08` — what the agent needs to decide what to do with it
  *  without a lookup. Empty when nothing is known (a PDF, text). */
-function describe(facts: Record<string, unknown> | undefined): string {
-  if (!facts) return '';
+function describe(row: MediaFile): string {
   const parts: string[] = [];
-  if (typeof facts.width === 'number' && typeof facts.height === 'number') parts.push(`${facts.width}×${facts.height}`);
-  if (typeof facts.duration_seconds === 'number') {
-    const whole = Math.round(facts.duration_seconds);
+  if (row.width !== null && row.height !== null) parts.push(`${row.width}×${row.height}`);
+  if (row.durationSeconds !== null) {
+    const whole = Math.round(row.durationSeconds);
     parts.push(`${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`);
   }
   return parts.length ? `, ${parts.join(', ')}` : '';
@@ -694,12 +693,13 @@ export class WindowStore {
   setSplash(on: boolean): void { this.splash = on; this.notify(); }
 
   /** Files dragged onto the window (drop.ts caught the paste before it
-   *  became text). Each is streamed from disk to the active session's
-   *  attachments route, which decides where it lands — media storage when
-   *  the project has media on, else the scratch pad — and answers where.
-   *  The chip inserted at the cursor expands to that on submit, so the
-   *  agent sees the media id or the scratch path inline; the drop itself
-   *  sends nothing, the user is still typing.
+   *  became text). The session's attachments plan says where each lands:
+   *  with media on, straight to the bucket — the parts in parallel on the
+   *  signed plan, then completed, the server never carrying a byte; else
+   *  streamed from disk into the scratch pad. The chip inserted at the
+   *  cursor expands to the media id (with its facts) or the scratch path on
+   *  submit, so the agent sees it inline; the drop itself sends nothing,
+   *  the user is still typing.
    *
    *  Returns a combined chip string to insert at the cursor (one chip per
    *  file that uploaded successfully), or null when nothing landed. */
@@ -710,17 +710,47 @@ export class WindowStore {
     for (const filePath of paths) {
       const name = basename(filePath);
       try {
-        const attached = await this.opts.backend().callBytes<{ path?: string; media?: string; facts?: Record<string, unknown> }>(
-          'POST', `/sessions/${session.id}/attachments?name=${encodeURIComponent(name)}`, await openAsBlob(filePath), 'application/octet-stream');
-        const landed = attached.media ? `media file ${attached.media}${describe(attached.facts)}` : (attached.path ?? 'the scratch pad');
-        chips.push(this.pastes.collapseFile(name, attached.media ? `${name} (${landed})` : landed));
+        const landed = await this.attach(session.id, name, filePath);
+        chips.push(this.pastes.collapseFile(name, landed));
         this.sessions.note(session.id, `${name} uploaded — ${landed}`);
       } catch (entry) {
-        this.sessions.note(session.id, `drop failed: ${basename(filePath)} — ${(entry as Error).message}`);
+        this.setToast(`${name} failed`);
+        this.sessions.note(session.id, `drop failed: ${name} — ${(entry as Error).message}`);
       }
     }
     return chips.length ? chips.join(' ') : null;
   };
+
+  /** One file to its place; answers what the chip expands to. */
+  private async attach(sessionId: string, name: string, filePath: string): Promise<string> {
+    const backend = this.opts.backend();
+    const file = await openAsBlob(filePath);
+    const plan = await backend.call<{ scratch?: true; media?: { id: string; upload: MediaUploadPlan; declared: Record<string, unknown> } }>(
+      'POST', `/sessions/${sessionId}/attachments/plan`, { name, size: file.size });
+    if (plan.media) {
+      const { id, upload, declared } = plan.media;
+      try {
+        // The toolbar shows the bytes landing, part by part, until the row
+        // is recorded; the note that follows replaces it.
+        const mb = (bytes: number) => (bytes / 1048576).toFixed(bytes < 10 * 1048576 ? 1 : 0);
+        const onProgress = (sent: number, total: number) =>
+          this.setToast(`uploading ${name} — ${mb(sent)} / ${mb(total)} MB (${Math.round(sent / total * 100)}%)`, 'cyan', 60_000);
+        onProgress(0, file.size);
+        const sent = await sendToStorage(file, upload, { onProgress });
+        this.setToast(`recording ${name}…`, 'cyan', 60_000);
+        const row = await backend.media.complete(id, { ...(declared as Parameters<typeof backend.media.complete>[1]), ...sent });
+        this.setToast(`${name} uploaded`, 'cyan');
+        return `${name} (media file ${row.id}${describe(row)})`;
+      } catch (error) {
+        await backend.media.abandon(id, { organization: String(declared.organization), uploadId: upload.mode === 'multipart' ? upload.uploadId : undefined }).catch(() => {});
+        throw error;
+      }
+    }
+    this.setToast(`uploading ${name} to the scratch pad…`, 'cyan', 60_000);
+    const attached = await backend.callBytes<{ path?: string }>('POST', `/sessions/${sessionId}/attachments?name=${encodeURIComponent(name)}`, file, 'application/octet-stream');
+    this.setToast(`${name} uploaded`, 'cyan');
+    return attached.path ?? 'the scratch pad';
+  }
 
   /** Show that session's conversation in the pane, tail first. The unsent
    *  text goes with the session being left and comes back with it. */
