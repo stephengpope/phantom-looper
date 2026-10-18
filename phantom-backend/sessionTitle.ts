@@ -3,7 +3,7 @@
 // The cadence, the selection and the write-back are the SDK's (SessionTitler).
 import { titleRequest } from '../phantom-looper/prompts/helpers/wiring.js';
 import type { TitleContext } from '@phantom-agent-sdk/backend';
-import { oneShot, type OneShotDeps } from './oneShot.js';
+import { oneShot, type OneShotDeps } from '@phantom-agent-sdk/backend';
 import { logger, errStr } from '@phantom-agent-sdk/backend';
 
 const log = logger('titler');

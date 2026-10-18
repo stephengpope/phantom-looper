@@ -13,7 +13,7 @@
 // finishes again, it'll be reported again.
 
 import { expiredHold, type PhantomBackend } from '@phantom-agent-sdk/backend';
-import { oneShot, type OneShotDeps } from '../oneShot.js';
+import { oneShot, type OneShotDeps } from '@phantom-agent-sdk/backend';
 import { lastAssistantFromJsonl } from '@phantom-agent-sdk/backend';
 import { titled } from '@phantom-agent-sdk/backend';
 import { STATUS_ICON } from '@phantom-agent-sdk/backend';
