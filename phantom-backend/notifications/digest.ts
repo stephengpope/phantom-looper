@@ -181,7 +181,7 @@ export class SessionDigest {
 
     // ── LLM call ─────────────────────────────────────────────────────────────
 
-    const text = await oneShot(this.oneShot, 'assistant', { type: 'session_digest', sessionId: null }, { system: SYSTEM, prompt: JSON.stringify(payload) });
+    const { text } = await oneShot(this.oneShot, 'assistant', { type: 'session_digest', sessionId: null }, { system: SYSTEM, prompt: JSON.stringify(payload) });
     const message = titled(TITLE(rows.length), text.trim());
 
     if (!message) return;

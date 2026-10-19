@@ -12,7 +12,7 @@ const TRIES = 2;
 export const writeTitle = (deps: OneShotDeps) => async (sessionId: string, context: TitleContext): Promise<string | null> => {
   for (let attempt = 1; attempt <= TRIES; attempt++) {
     try {
-      const title = await oneShot(deps, 'assistant', { type: 'title', sessionId }, titleRequest(context));
+      const { text: title } = await oneShot(deps, 'assistant', { type: 'title', sessionId }, titleRequest(context));
       if (title.trim()) return title;
     } catch (error) {
       log.warn({ session: sessionId, attempt, err: errStr(error) }, 'session title attempt failed');

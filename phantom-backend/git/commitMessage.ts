@@ -18,7 +18,7 @@ export async function writeCommitMessage(
 ): Promise<string> {
   for (let attempt = 1; attempt <= TRIES; attempt++) {
     const message = (await oneShot(deps, 'assistant', { type: 'commit_message', sessionId: input.sessionId },
-      { prompt: commitMessagePrompt(input.stat, input.diff, input.card) }, { report })).trim();
+      { prompt: commitMessagePrompt(input.stat, input.diff, input.card) }, { report })).text.trim();
     if (message && message.length <= 2000) return message;
     log.warn({ attempt }, 'commit message attempt answered nonsense — trying again');
   }
