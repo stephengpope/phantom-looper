@@ -13,16 +13,25 @@
 // an empty one keeps the stored value, a changed name or Where MOVES it
 // (write at the new spot, then remove the old). [d] removes the row at its
 // own layer.
+//
+// An OAuth secret (the editor's Type row) is the same row with a connection
+// on it: the list shows its provider and status, [enter] opens the editor
+// where Connect runs the browser round-trip (oauthConnect.ts: the server
+// builds the URL and exchanges the code; this side opens the browser and
+// catches the redirect), [x] disconnects it.
 import { useCallback, useEffect, useState } from 'react';
 import { SelectList, type Choice } from './SelectList.js';
 import { SecretEditor, type SecretDraft, type SecretId, type SecretTarget } from './SecretEditor.js';
 import { Screen } from './Screen.js';
 import { useInput } from './useInput.js';
 import type { Api } from '../settings.js';
+import { catchRedirect, openBrowser } from '../oauthConnect.js';
+import { OAUTH_REDIRECT_URI, type OAuthPreset, type OAuthState } from '@phantom-agent-sdk/client';
 
 const GLOBAL_TAG = 'global';
 
-interface Row { name: string; description: string; scope: 'global' | 'project'; project?: string }
+interface Row { name: string; description: string; scope: 'global' | 'project'; project?: string; oauth?: OAuthState }
+type Presets = { presets: OAuthPreset[]; redirectUri: string };
 interface Project { id: string; name: string; displayName?: string | null }
 
 /** The row's list key: its layer and name — the two that make it one row. */
@@ -33,6 +42,7 @@ const scopeQuery = (project: string | null | undefined) =>
 export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [presets, setPresets] = useState<Presets>({ presets: [], redirectUri: OAUTH_REDIRECT_URI });
   // ←→: one project's own rows, or null for every layer, grouped.
   const [filter, setFilter] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ mode: 'new' } | { mode: 'edit'; row: Row } | null>(null);
@@ -48,11 +58,13 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
       // The bare list is every layer; the projects call names the groups,
       // the ←→ ring and the editor's Where targets. One failure fails the
       // screen honestly.
-      const [reply, projects] = await Promise.all([
+      const [reply, projects, presets] = await Promise.all([
         api('GET', '/secrets') as Promise<{ secrets: Row[] }>,
         api('GET', '/projects') as Promise<Project[]>,
+        api('GET', '/secrets/oauth/presets') as Promise<Presets>,
       ]);
       setProjects(projects);
+      setPresets(presets);
       setRows(reply.secrets);
       setNotice(undefined);
     } catch (error) { setNotice(`could not load: ${(error as Error).message}`); setRows([]); }
@@ -86,10 +98,27 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
       .finally(() => setBusy(false));
   };
 
-  /** PUT at one layer. No value = the server keeps the stored one. */
+  /** PUT at one layer. No value / client secret = the server keeps the stored one. */
   const put = (draft: SecretDraft, value?: string) =>
     api('PUT', `/secrets/${encodeURIComponent(draft.name)}${scopeQuery(draft.projectId)}`,
-      { description: draft.description, ...(value ? { value } : {}) });
+      draft.type === 'oauth'
+        ? { description: draft.description,
+            oauth: { provider: draft.oauth.provider, clientId: draft.oauth.clientId, scopes: draft.oauth.scopes.split(/[\s,]+/).filter(Boolean),
+              ...(draft.oauth.authUrl ? { authUrl: draft.oauth.authUrl } : {}), ...(draft.oauth.tokenUrl ? { tokenUrl: draft.oauth.tokenUrl } : {}) },
+            ...(draft.oauth.clientSecret ? { clientSecret: draft.oauth.clientSecret } : {}) }
+        : { description: draft.description, ...(value ? { value } : {}) });
+
+  /** The browser round-trip for a stored OAuth secret: the server's URL in
+   *  the browser, the redirect caught here, the server finishing it. */
+  const connect = async (id: SecretId, signal: AbortSignal): Promise<OAuthState> => {
+    const path = `/secrets/${encodeURIComponent(id.name)}`;
+    const { url } = await api('POST', `${path}/oauth/start${scopeQuery(id.projectId)}`) as { url: string };
+    const caught = catchRedirect(presets.redirectUri, signal);
+    openBrowser(url);
+    const { oauth } = await api('POST', `${path}/oauth/callback`, { url: await caught }) as { oauth: OAuthState };
+    await load();
+    return oauth;
+  };
 
   /** The editor's auto-save: one write, the editor stays open. Rejects so
    *  the editor can say why; the list re-reads either way. */
@@ -105,7 +134,7 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
       // A move: the value goes with it — typed fresh, or read back from the
       // old spot (this process already holds every value the agent reads).
       // Write first, remove second: a failure in between leaves both rows
-      // on the list, never neither.
+      // on the list, never neither. (The editor never moves an OAuth secret.)
       const oldPath = `/secrets/${encodeURIComponent(from.name)}${scopeQuery(from.projectId)}`;
       const value = draft.value || (await api('GET', oldPath) as { value: string }).value;
       await put(draft, value);
@@ -134,10 +163,10 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
       <SecretEditor
         mode={editing.mode}
         initial={editing.mode === 'edit'
-          ? { name: editing.row.name, description: editing.row.description, projectId: editing.row.project ?? null }
+          ? { name: editing.row.name, description: editing.row.description, projectId: editing.row.project ?? null, oauth: editing.row.oauth }
           : { projectId: filter }}
-        targets={targets}
-        onSave={save} onClose={() => setEditing(null)}
+        targets={targets} presets={presets}
+        onSave={save} onConnect={connect} onClose={() => setEditing(null)}
       />
     );
   }
@@ -148,7 +177,7 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
   const choice = (row: Row): Choice<string> => ({
     value: keyOf(row.project, row.name), label: row.name,
     ...(filter === null ? { detail: layerOf(row) } : {}),
-    hint: row.description || '(no description)',
+    hint: (row.description || '(no description)') + (row.oauth ? ` · ${row.oauth.provider} · ${row.oauth.status}${row.oauth.accountEmail ? ` · ${row.oauth.accountEmail}` : ''}` : ''),
   });
   const choices: Choice<string>[] = [];
   if (filter === null) {
@@ -175,6 +204,7 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
       footer={[
         { key: '←→', does: 'project', when: projects.length > 0 },
         { key: 'enter', does: 'edit' }, { key: 'n', does: 'new secret' },
+        { key: 'x', does: 'disconnect', when: shown.some((row) => row.oauth?.status === 'connected') },
         { key: 'd', does: 'remove' }, { key: 'esc', does: 'close' },
       ]}>
       <SelectList
@@ -188,9 +218,15 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
         onCancel={onClose}
         onKey={(char, value) => {
           if (char === 'n') { setEditing({ mode: 'new' }); return; }
-          if (char !== 'd' || !value) return;
+          if ((char !== 'd' && char !== 'x') || !value) return;
           const row = shown.find((row) => keyOf(row.project, row.name) === value);
           if (!row) return;
+          if (char === 'x') {
+            if (!row.oauth || row.oauth.status === 'disconnected') return;
+            run(() => api('POST', `/secrets/${encodeURIComponent(row.name)}/oauth/disconnect${scopeQuery(row.project)}`),
+              `${row.name} disconnected — [enter] to connect it again`);
+            return;
+          }
           run(() => api('DELETE', `/secrets/${encodeURIComponent(row.name)}${scopeQuery(row.project)}`),
             `${row.name} removed (${layerOf(row)})`);
         }}
