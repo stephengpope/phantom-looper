@@ -314,9 +314,6 @@ export function SecretEditor({ mode, initial, targets, presets, isActive = true,
       {oauth ? (
         <>
           {pickRow('provider', preset?.label ?? draft.oauth.provider, true, `[space/←→] next of ${presets.presets.length}`)}
-          {preset?.hint && focused === 'provider' ? (
-            <Box marginLeft={17}><Text dimColor wrap="wrap">{preset.hint}</Text></Box>
-          ) : null}
           {preset?.setups?.length ? pickRow('setup', setupLabel ? `${setupLabel.label}${setupLabel.description ? ` — ${setupLabel.description}` : ''}` : 'pick one to fill Scopes',
             Boolean(setupLabel), `[space/←→] ${preset.setups.map((choice) => choice.label).join(' / ')}`) : null}
           <Box marginTop={1}>
