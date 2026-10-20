@@ -15,10 +15,10 @@
 // own layer.
 //
 // An OAuth secret (the editor's Type row) is the same row with a connection
-// on it: the list shows its provider and status, [enter] opens the editor
-// where Connect runs the browser round-trip (oauthConnect.ts: the server
-// builds the URL and exchanges the code; this side opens the browser and
-// catches the redirect), [x] disconnects it.
+// on it: the list shows its provider and status, [c] connects it — the
+// browser round-trip (oauthConnect.ts: the server builds the URL and
+// exchanges the code; this side opens the browser and catches the
+// redirect) — the editor's Connect row does the same, [x] disconnects it.
 import { useCallback, useEffect, useState } from 'react';
 import { SelectList, type Choice } from './SelectList.js';
 import { SecretEditor, type SecretDraft, type SecretId, type SecretTarget } from './SecretEditor.js';
@@ -93,7 +93,7 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
   const run = (what: () => Promise<unknown>, after: string) => {
     setBusy(true);
     void what()
-      .then(() => after, (error: Error) => error.message)
+      .then((said) => after || String(said), (error: Error) => error.message)
       .then(async (said) => { await load(); setNotice(said); })
       .finally(() => setBusy(false));
   };
@@ -110,14 +110,24 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
 
   /** The browser round-trip for a stored OAuth secret: the server's URL in
    *  the browser, the redirect caught here, the server finishing it. */
-  const connect = async (id: SecretId, signal: AbortSignal): Promise<OAuthState> => {
+  const connect = async (id: SecretId, signal: AbortSignal, onUrl: (url: string) => void = () => undefined): Promise<OAuthState> => {
     const path = `/secrets/${encodeURIComponent(id.name)}`;
     const { url } = await api('POST', `${path}/oauth/start${scopeQuery(id.projectId)}`) as { url: string };
     const caught = catchRedirect(presets.redirectUri, signal);
     openBrowser(url);
+    onUrl(url);
+    // The browser may not open (no desktop, ssh): the url is on screen to copy.
+    setNotice(`${id.name}: finish in your browser — if it did not open, visit ${url}`);
     const { oauth } = await api('POST', `${path}/oauth/callback`, { url: await caught }) as { oauth: OAuthState };
     await load();
     return oauth;
+  };
+
+  /** [c] on a row: connect it from the list, no editor. */
+  const connectRow = (row: Row) => {
+    const controller = new AbortController();
+    run(() => connect({ name: row.name, projectId: row.project ?? null }, controller.signal)
+      .then((oauth) => `${row.name} connected${oauth.accountEmail ? ` · ${oauth.accountEmail}` : ''}`), '');
   };
 
   /** The editor's auto-save: one write, the editor stays open. Rejects so
@@ -204,6 +214,7 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
       footer={[
         { key: '←→', does: 'project', when: projects.length > 0 },
         { key: 'enter', does: 'edit' }, { key: 'n', does: 'new secret' },
+        { key: 'c', does: 'connect', when: shown.some((row) => row.oauth) },
         { key: 'x', does: 'disconnect', when: shown.some((row) => row.oauth?.status === 'connected') },
         { key: 'd', does: 'remove' }, { key: 'esc', does: 'close' },
       ]}>
@@ -218,9 +229,10 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
         onCancel={onClose}
         onKey={(char, value) => {
           if (char === 'n') { setEditing({ mode: 'new' }); return; }
-          if ((char !== 'd' && char !== 'x') || !value) return;
+          if (!['d', 'x', 'c'].includes(char) || !value) return;
           const row = shown.find((row) => keyOf(row.project, row.name) === value);
           if (!row) return;
+          if (char === 'c') { if (row.oauth) connectRow(row); return; }
           if (char === 'x') {
             if (!row.oauth || row.oauth.status === 'disconnected') return;
             run(() => api('POST', `/secrets/${encodeURIComponent(row.name)}/oauth/disconnect${scopeQuery(row.project)}`),

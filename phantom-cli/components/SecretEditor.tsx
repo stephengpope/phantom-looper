@@ -80,8 +80,10 @@ export function SecretEditor({ mode, initial, targets, presets, isActive = true,
   /** Write the draft; `from` is where it is stored now (absent = create).
    *  Rejects with the reason when the server would not take it. */
   onSave: (draft: SecretDraft, from?: SecretId) => Promise<void>;
-  /** Run the browser round-trip for a stored OAuth secret; resolves with its state. */
-  onConnect: (id: SecretId, signal: AbortSignal) => Promise<OAuthState>;
+  /** Run the browser round-trip for a stored OAuth secret; resolves with its
+   *  state. `onUrl` gets the provider's page the moment it is known, so the
+   *  form can show it in case the browser did not open. */
+  onConnect: (id: SecretId, signal: AbortSignal, onUrl: (url: string) => void) => Promise<OAuthState>;
   onClose: () => void;
 }) {
   const [draft, setDraft] = useState<SecretDraft>({
@@ -100,6 +102,7 @@ export function SecretEditor({ mode, initial, targets, presets, isActive = true,
   const [state, setState] = useState<OAuthState | undefined>(initial?.oauth);
   const [connecting, setConnecting] = useState<AbortController | null>(null);
   const [connectError, setConnectError] = useState<string | undefined>();
+  const [connectUrl, setConnectUrl] = useState<string | undefined>();
   /** The Setup row's pick — a convenience that fills Scopes; never stored. */
   const [setup, setSetup] = useState<string | null>(null);
 
@@ -146,7 +149,12 @@ export function SecretEditor({ mode, initial, targets, presets, isActive = true,
     const draft = draftRef.current;
     const stored = storedRef.current;
     const name = secretName(draft.name);
-    const essentials = draft.type === 'oauth' ? Boolean(draft.oauth.provider && draft.oauth.clientId.trim()) : Boolean(draft.value);
+    // Enough to create: a value; or a provider + client id + the client
+    // secret where the provider issues one (a connect without it cannot work).
+    const needsSecret = presets.presets.find((preset) => preset.id === draft.oauth.provider)?.clientAuth !== 'none';
+    const essentials = draft.type === 'oauth'
+      ? Boolean(draft.oauth.provider && draft.oauth.clientId.trim() && (!needsSecret || draft.oauth.clientSecret))
+      : Boolean(draft.value);
     // Nothing exists yet and there is not enough to create: wait.
     if (!stored && (!name || !essentials)) {
       if (essentials && !name) setError(`name: ${SECRET_NAME_RULE}`);
@@ -203,19 +211,22 @@ export function SecretEditor({ mode, initial, targets, presets, isActive = true,
   };
 
   /** The Connect row: save what is typed, then run the browser round-trip. */
+  const connectingRef = useRef<AbortController | null>(null);
   const connect = () => {
-    if (connecting) return;
+    if (connectingRef.current) return;
     const controller = new AbortController();
+    connectingRef.current = controller;
     setConnecting(controller);
     setConnectError(undefined);
+    setConnectUrl(undefined);
     void commit()
       .then(() => {
         const stored = storedRef.current;
-        if (!stored) throw new Error('fill in the name, provider and client id first');
-        return onConnect(stored, controller.signal);
+        if (!stored) throw new Error(`fill in the name, client id${preset?.clientAuth === 'none' ? '' : ' and client secret'} first`);
+        return onConnect(stored, controller.signal, setConnectUrl);
       })
       .then((state) => setState(state), (error: Error) => setConnectError(error.message))
-      .finally(() => setConnecting(null));
+      .finally(() => { connectingRef.current = null; setConnecting(null); setConnectUrl(undefined); });
   };
 
   useInput((char, key) => {
@@ -287,6 +298,7 @@ export function SecretEditor({ mode, initial, targets, presets, isActive = true,
   const whereLabel = targets.find((target) => target.id === draft.projectId)?.label ?? 'global — every project';
   const setupLabel = (preset?.setups ?? []).find((choice) => choice.id === setup);
   const hint = error ? undefined
+    : connectUrl ? `if your browser did not open, visit: ${connectUrl}`
     : focused === 'connect' ? `register this redirect with the provider: ${presets.redirectUri}`
     : undefined;
 
@@ -298,7 +310,7 @@ export function SecretEditor({ mode, initial, targets, presets, isActive = true,
           : saveState === 'saved' ? <Text color="green">saved ✓</Text>
           : saveState === 'failed' ? <Text color="red">save failed — edit to retry</Text>
           : <Text dimColor>{exists ? 'saves as you leave a field · esc closes'
-            : oauth ? 'stored once it has a name, provider and client id' : 'stored once it has a name and a value'}</Text>}
+            : oauth ? `stored once it has a name, client id${preset?.clientAuth === 'none' ? '' : ' and secret'} · Connect opens your browser` : 'stored once it has a name and a value'}</Text>}
       </Box>
       <Box marginTop={1}>
         {label('Name', 'name')}
@@ -367,7 +379,7 @@ export function SecretEditor({ mode, initial, targets, presets, isActive = true,
       <Box marginTop={1}>
         {error
           ? <Text color="red" wrap="truncate">{error}</Text>
-          : hint ? <Text dimColor wrap="truncate">{hint}</Text>
+          : hint ? <Text dimColor wrap={connectUrl ? 'wrap' : 'truncate'}>{hint}</Text>
           : <Text dimColor>[tab/↑↓] move · [enter] next · [esc] close</Text>}
       </Box>
     </Box>
